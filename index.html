@@ -3,556 +3,578 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Panel Data Simulation Lab — OLS, FE, RE Estimators</title>
+<title>Panel Data Multiverse Lab — Real Wages, Real Analytic Choices</title>
+<meta name="description" content="Interactive multiverse / specification-curve lab on a real longitudinal wage panel (NLSY, 545 men, 1980–1987). See how Pooled OLS, Between, Random Effects, Fixed Effects and First Differences move the union, marriage and schooling premiums — verified against R's plm."/>
 <style>
-  :root { --bg:#0a0a0a; --panel:#121212; --muted:#9aa0a6; --text:#e5e7eb; --border:#262626; --accent:#3b82f6; --success:#22c55e; --warning:#f59e0b; --danger:#ef4444; }
+  :root { --bg:#0a0a0a; --panel:#121212; --muted:#9aa0a6; --text:#e5e7eb; --border:#262626; --accent:#3b82f6; --success:#22c55e; --warning:#f59e0b; --danger:#ef4444; --violet:#a78bfa; }
   html,body{height:100%;background:var(--bg);color:var(--text);font:14px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:0}
   *{box-sizing:border-box}
   .container{max-width:1400px;margin:0 auto;padding:24px 16px}
   h1{font-size:24px;margin:0 0 8px;font-weight:600} h2{font-size:16px;margin:0 0 8px;font-weight:600} h3{font-size:14px;margin:0 0 6px;font-weight:600}
   .muted{color:var(--muted)} .mt-2{margin-top:8px}.mt-3{margin-top:12px}.mt-4{margin-top:16px}.mt-6{margin-top:24px}
-  .row{display:grid;grid-template-columns:1fr;gap:16px}@media(min-width:1200px){.row{grid-template-columns:320px 1fr}}
+  .row{display:grid;grid-template-columns:1fr;gap:16px}@media(min-width:1200px){.row{grid-template-columns:330px 1fr}}
   .panel{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:16px}
   .btn{background:#1e1e1e;border:1px solid var(--border);color:var(--text);border-radius:10px;padding:8px 12px;cursor:pointer;font-size:13px;transition:all 0.15s}
   .btn:hover{background:#282828;border-color:#3a3a3a}
   .btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
   .btn-primary:hover{background:#2563eb}
-  .chip{display:inline-block;padding:5px 10px;border:1px solid var(--border);border-radius:8px;background:#161616;cursor:pointer;font-size:13px;transition:all 0.15s}
-  .chip:hover{background:#1f1f1f;border-color:#3a3a3a}
-  .chip.active{background:#1e3a5f;border-color:var(--accent);color:#93c5fd}
   .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .grid-3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px}
-  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px}
   .card{background:#101010;border:1px solid var(--border);border-radius:14px;padding:14px}
-  .card .title{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px}
-  .card .value{font-size:24px;margin-top:6px;font-weight:600}
-  .card .foot{font-size:12px;color:#8a8a8a;margin-top:6px}
+  .card .title{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.5px}
+  .card .value{font-size:22px;margin-top:6px;font-weight:600}
+  .card .foot{font-size:11px;color:#8a8a8a;margin-top:6px}
   .card.highlight{border-color:var(--accent);background:#0c1929}
   svg{width:100%;height:100%;display:block}
-  .chart{height:320px;background:#0c0c0c;border:1px solid var(--border);border-radius:12px;padding:8px}
-  label{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin:8px 0 4px}
-  input[type=range]{width:100%;accent-color:var(--accent)}
-  input[type=checkbox]{accent-color:var(--accent)}
-  .param-group{margin-bottom:16px;padding-bottom:16px;border-bottom:1px solid var(--border)}
-  .param-group:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
-  .param-group-title{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:10px;font-weight:600}
+  .chart{height:320px;background:#0c0c0c;border:1px solid var(--border);border-radius:12px;padding:8px;position:relative;cursor:zoom-in}
+  .chart.tall{height:440px}
+  .chart.diag{height:340px}
+  .chart-expand{position:absolute;top:6px;right:6px;z-index:2;background:rgba(18,18,18,.82);border:1px solid var(--border);color:#cbd5e1;border-radius:6px;font-size:14px;line-height:1;padding:4px 7px;cursor:zoom-in;opacity:.55;transition:opacity .12s}
+  .chart-expand:hover{opacity:1;background:#1f1f1f;border-color:#3a3a3a}
+  #figModal{position:fixed;inset:0;background:rgba(0,0,0,.86);z-index:50;display:none;align-items:center;justify-content:center;padding:24px}
+  #figModal.open{display:flex}
+  #figModalInner{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:18px;max-width:1150px;width:100%;max-height:94vh;overflow:auto}
+  #figModalInner .bar{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}
+  #figModalInner h3{margin:0}
+  #figModalBody{background:#0c0c0c;border:1px solid var(--border);border-radius:10px;padding:12px}
+  #figModalBody svg{width:100%;height:auto;max-height:78vh}
+  #figClose{background:#1e1e1e;border:1px solid var(--border);color:var(--text);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:14px}
+  #figClose:hover{background:#282828}
+  label{display:block;font-size:12px;color:var(--muted);margin:8px 0 4px}
+  .opt{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);margin:6px 0;cursor:pointer}
+  .opt input{accent-color:var(--accent)}
+  input[type=checkbox],input[type=radio]{accent-color:var(--accent)}
   .help-text{font-size:11px;color:#6b7280;margin-top:2px;line-height:1.4}
-  .badge{display:inline-block;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:600;text-transform:uppercase}
-  .badge-success{background:#14532d;color:#86efac}
-  .badge-warning{background:#713f12;color:#fde047}
-  .badge-danger{background:#7f1d1d;color:#fca5a5}
-  .badge-info{background:#1e3a5f;color:#93c5fd}
-  .collapsible{cursor:pointer;user-select:none}
-  .collapsible::before{content:"▸";display:inline-block;margin-right:6px;transition:transform 0.2s}
+  .badge{display:inline-block;padding:2px 7px;border-radius:5px;font-size:10px;font-weight:600;text-transform:uppercase}
+  .badge-success{background:#14532d;color:#86efac}.badge-warning{background:#713f12;color:#fde047}.badge-danger{background:#7f1d1d;color:#fca5a5}.badge-info{background:#1e3a5f;color:#93c5fd}
+  .param-group{margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border)}
+  .param-group:last-child{border-bottom:none;margin-bottom:0;padding-bottom:0}
+  .param-group-title{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:8px;font-weight:600}
+  .collapsible{cursor:pointer;user-select:none;font-weight:600}
+  .collapsible::before{content:"\25B8";display:inline-block;margin-right:6px;transition:transform 0.2s}
   .collapsible.open::before{transform:rotate(90deg)}
-  .collapse-content{display:none;padding-top:12px}
+  .collapse-content{display:none;padding-top:10px}
   .collapse-content.show{display:block}
   .stat-table{width:100%;border-collapse:collapse;font-size:13px}
-  .stat-table th,.stat-table td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)}
+  .stat-table th,.stat-table td{padding:7px 9px;text-align:left;border-bottom:1px solid var(--border)}
   .stat-table th{color:var(--muted);font-weight:500;font-size:11px;text-transform:uppercase}
   .stat-table tr:last-child td{border-bottom:none}
-  .stat-table .num{text-align:right;font-family:monospace}
-  .sig{color:var(--success)}
-  .not-sig{color:var(--muted)}
+  .stat-table .num{text-align:right;font-family:ui-monospace,Menlo,monospace}
   .tutorial-box{background:linear-gradient(135deg,#1e3a5f 0%,#172554 100%);border:1px solid #1d4ed8;border-radius:12px;padding:16px;margin-bottom:16px}
   .tutorial-box h3{color:#93c5fd;margin-bottom:8px}
   .tutorial-box p{color:#bfdbfe;font-size:13px;margin:0}
-  .formula{font-family:'Courier New',monospace;background:#1a1a1a;padding:12px;border-radius:8px;font-size:13px;overflow-x:auto;border:1px solid var(--border)}
+  .formula{font-family:ui-monospace,Menlo,monospace;background:#1a1a1a;padding:12px;border-radius:8px;font-size:12.5px;overflow-x:auto;border:1px solid var(--border);white-space:pre-wrap}
   .legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;margin-top:8px}
   .legend-item{display:flex;align-items:center;gap:4px}
   .legend-dot{width:10px;height:10px;border-radius:50%}
   .tabs{display:flex;gap:4px;margin-bottom:16px;flex-wrap:wrap}
+  .chip{display:inline-block;padding:6px 11px;border:1px solid var(--border);border-radius:8px;background:#161616;cursor:pointer;font-size:13px;transition:all 0.15s}
+  .chip:hover{background:#1f1f1f;border-color:#3a3a3a}
+  .chip.active{background:#1e3a5f;border-color:var(--accent);color:#93c5fd}
   .interpretation{background:#0f1419;border:1px solid var(--border);border-radius:10px;padding:14px;margin-top:12px}
   .interpretation h4{font-size:13px;color:var(--accent);margin:0 0 8px}
-  .interpretation p{font-size:13px;color:#d1d5db;margin:0}
+  .interpretation p{font-size:13px;color:#d1d5db;margin:0 0 6px}
   .alert{padding:12px 14px;border-radius:10px;font-size:13px;margin-top:12px}
   .alert-warning{background:#422006;border:1px solid #854d0e;color:#fef3c7}
   .alert-info{background:#0c1929;border:1px solid #1e40af;color:#bfdbfe}
   .alert-success{background:#052e16;border:1px solid #166534;color:#bbf7d0}
-  .progress-bar{height:4px;background:#262626;border-radius:2px;overflow:hidden;margin-top:8px}
-  .progress-bar-fill{height:100%;background:var(--accent);transition:width 0.3s}
   select{width:100%;background:#0c0c0c;border:1px solid var(--border);color:var(--text);border-radius:10px;padding:8px 10px;font-size:13px}
-  select:focus{outline:2px solid #1d4ed8;outline-offset:1px}
+  .eqblock{margin:12px 0}
+  .eqblock .lbl{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:5px;font-weight:600}
+  .eqmath{font-family:ui-serif,Georgia,'Times New Roman',serif;font-size:15px;background:#0c0c0c;border:1px solid var(--border);border-radius:8px;padding:12px 14px;overflow-x:auto;line-height:1.8}
+  .eqmath .cap{font-family:system-ui,sans-serif;font-size:11px;color:#6b7280}
+  .eq-focal{color:#34d399;font-weight:600}
+  .eq-num{color:#93c5fd}
+  .eq-note{color:#9aa0a6;font-style:italic}
+  .progress-bar{height:6px;background:#262626;border-radius:3px;overflow:hidden;margin:8px 0}
+  .progress-bar-fill{height:100%;background:var(--accent);transition:width 0.15s;width:0}
+  .objective{background:#0c1929;border:1px solid #1e40af;border-left:3px solid var(--accent);border-radius:10px;padding:10px 14px;font-size:13px;color:#bfdbfe;margin-bottom:14px}
+  .objective strong{color:#dbeafe}
+  .term{border-bottom:1px dotted #6b7280;cursor:help}
+  .check-q{padding:12px 0;border-bottom:1px solid var(--border)}
+  .check-q:last-child{border-bottom:none}
+  .check-opt{display:block;padding:6px 10px;border:1px solid var(--border);border-radius:8px;margin:4px 0;cursor:pointer;font-size:13px;background:#0c0c0c}
+  .check-opt:hover{border-color:#3a3a3a}
+  .check-opt.correct{border-color:#166534;background:#052e16;color:#bbf7d0}
+  .check-opt.wrong{border-color:#854d0e;background:#422006;color:#fef3c7}
+  .check-fb{font-size:12px;margin-top:6px;color:#9aa0a6}
+  #lessonBar{position:fixed;left:0;right:0;bottom:0;background:#0c1929;border-top:1px solid #1e40af;padding:12px 16px;z-index:30;display:none;box-shadow:0 -4px 20px rgba(0,0,0,.5)}
+  #lessonBar .inner{max-width:1100px;margin:0 auto;display:flex;gap:14px;align-items:center}
+  #lessonBar .step-text{flex:1;font-size:13px;color:#dbeafe}
+  #lessonBar .step-n{font-size:11px;color:#93c5fd;text-transform:uppercase;letter-spacing:1px}
+  a:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible,.chip:focus-visible,.toc a:focus-visible{outline:2px solid #93c5fd;outline-offset:2px}
+  @media(max-width:760px){.grid-2,.grid-3{grid-template-columns:1fr}.container{padding:16px 10px}.chart{height:260px}}
+  html{scroll-behavior:smooth}
+  .toc{position:sticky;top:0;background:var(--panel);padding:10px 0;margin:-4px 0 8px;border-bottom:1px solid var(--border);z-index:6;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+  .toc .toc-label{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-right:4px}
+  .toc a{font-size:12px;color:#cbd5e1;text-decoration:none;padding:5px 10px;border:1px solid var(--border);border-radius:8px;background:#161616}
+  .toc a:hover{background:#1f1f1f;border-color:#3a3a3a;color:#fff}
+  .doc-section{padding:22px 0;border-bottom:1px solid var(--border);scroll-margin-top:64px}
+  .doc-section:last-child{border-bottom:none}
+  .doc-section h2{font-size:19px;margin-bottom:10px}
+  .doc-section p,.doc-section li{max-width:80ch}
+  .doc-lead{color:#cbd5e1}
+  .glossary{display:grid;grid-template-columns:1fr;gap:10px}@media(min-width:760px){.glossary{grid-template-columns:1fr 1fr}}
+  .glossary dt{font-weight:600;color:#93c5fd;font-size:13px}
+  .glossary dd{margin:2px 0 0;color:var(--muted);font-size:13px;line-height:1.5}
+  .term{border-bottom:1px dotted #4b5563;cursor:help}
   footer{margin-top:32px;padding-top:16px;border-top:1px solid var(--border)}
   footer a{color:var(--accent);text-decoration:none}
   footer a:hover{text-decoration:underline}
+  #loading{padding:40px;text-align:center;color:var(--muted)}
+  .pill{font-family:ui-monospace,Menlo,monospace;font-size:11px;background:#161616;border:1px solid var(--border);border-radius:6px;padding:1px 6px}
 </style>
 </head>
 <body>
 <div class="container">
   <header>
-    <h1>Panel Data Simulation Lab</h1>
-    <p class="muted">Interactive exploration of cross-sectional vs panel data estimators. Understand when OLS fails and why Fixed Effects and Random Effects matter.</p>
+    <h1>Panel Data Multiverse Lab</h1>
+    <p class="muted">A real longitudinal wage panel meets the <em>multiverse</em>. Pick an effect, then watch the <strong>whole universe of estimates</strong> open up as you change estimator, controls, sample and inference — and learn <em>why</em> the answer moves. Data: <span class="pill">NLSY · 545 men · 1980–1987</span>. Every number is verified against R's <span class="pill">plm</span>.</p>
   </header>
 
-  <div id="tutorialSection" class="mt-4">
-    <div class="tutorial-box">
-      <h3>🎯 Learning Objective</h3>
-      <p id="learningObjective">Explore how different estimators recover the true causal effect (β) under various data-generating processes. Adjust parameters to see how selection bias, measurement error, and time trends affect each estimator's performance.</p>
+  <div class="tutorial-box mt-4">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
+      <div style="flex:1;min-width:260px">
+        <h3>🎯 The big idea</h3>
+        <p id="learningObjective">One dataset, one question, many defensible analyses. The spread of results across reasonable analytic choices is the “garden of forking paths.” Here you build that garden by hand on real wage data and see which conclusions are robust and which are an artifact of a single specification.</p>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <button class="btn btn-primary" id="btn-lesson" style="white-space:nowrap">▶ Start guided lesson</button>
+        <button class="btn" id="btn-share" style="white-space:nowrap">🔗 Copy shareable link</button>
+      </div>
     </div>
   </div>
 
-  <section class="mt-4">
-    <div class="row">
-      <div>
-        <!-- Actions at top for easy access -->
+  <div id="loading">Loading real panel data…</div>
+
+  <section id="appBody" class="mt-4" style="display:none">
+    <div class="row" id="mainRow">
+      <!-- ============ SIDEBAR: research question ============ -->
+      <div id="sidebarCol">
         <div class="panel">
-          <h2>Actions</h2>
-          <div class="grid-2">
-            <button class="btn btn-primary" id="btn-newsample">New Sample</button>
-            <button class="btn" id="btn-download">Download CSV</button>
+          <h2>Research question</h2>
+          <div class="param-group">
+            <div class="param-group-title">Focal effect (the estimand)</div>
+            <label class="opt"><input type="radio" name="focal" value="union" checked> Union wage premium</label>
+            <label class="opt"><input type="radio" name="focal" value="married"> Marriage wage premium</label>
+            <label class="opt"><input type="radio" name="focal" value="educ"> Returns to schooling</label>
+            <div class="help-text" id="focalHelp"></div>
           </div>
-          <p class="help-text muted mt-2">Generate a new random sample with current parameters, or download the simulated data for external analysis.</p>
-        </div>
-
-        <!-- Quick Presets -->
-        <div class="panel mt-3">
-          <div class="collapsible open" id="coll-presets">Scenario Presets</div>
-          <div class="collapse-content show" id="content-presets">
-            <p class="help-text muted">Click a preset to load parameter values demonstrating specific phenomena.</p>
-            <div class="mt-2" style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-              <button class="btn" id="preset-baseline" title="No selection bias, no confounding - all estimators should work">
-                <strong>Baseline</strong>
-                <span class="muted" style="display:block;font-size:10px">No bias</span>
-              </button>
-              <button class="btn" id="preset-selection" title="Strong selection into treatment based on unobserved heterogeneity">
-                <strong>Selection Bias</strong>
-                <span class="muted" style="display:block;font-size:10px">FE corrects</span>
-              </button>
-              <button class="btn" id="preset-rct" title="Randomized treatment assignment - gold standard">
-                <strong>RCT-like</strong>
-                <span class="muted" style="display:block;font-size:10px">Random assign</span>
-              </button>
-              <button class="btn" id="preset-noisy" title="High measurement error and noise">
-                <strong>Noisy Data</strong>
-                <span class="muted" style="display:block;font-size:10px">Wide CIs</span>
-              </button>
-              <button class="btn" id="preset-trend" title="Secular time trend in outcomes">
-                <strong>Time Trend</strong>
-                <span class="muted" style="display:block;font-size:10px">Confounding</span>
-              </button>
-              <button class="btn" id="preset-lowvar" title="Little within-person variation in treatment">
-                <strong>Low Variation</strong>
-                <span class="muted" style="display:block;font-size:10px">FE loses power</span>
-              </button>
-            </div>
+          <div class="param-group">
+            <div class="param-group-title">Outcome</div>
+            <select id="outcome" aria-label="Outcome variable">
+              <option value="lwage">log(hourly wage) — semi-elasticity</option>
+              <option value="wage">hourly wage ($) — level</option>
+            </select>
+            <div class="help-text">log wage → coefficient ≈ % change. Level → change in dollars.</div>
           </div>
-        </div>
-
-        <!-- Core Parameters (collapsed by default except key ones) -->
-        <div class="panel mt-3">
-          <h2>Data Generation Parameters</h2>
-          <p class="muted help-text" style="margin-bottom:12px">Adjust parameters to control the simulated panel data. Click headers to expand/collapse sections.</p>
-
-          <!-- Sample Structure - Open by default -->
-          <div class="collapsible open" id="coll-sample">Sample Structure</div>
-          <div class="collapse-content show" id="content-sample">
-            <label title="Number of individuals/units in the panel">Individuals (N): <span id="lblN"></span></label>
-            <input type="range" min="50" max="2000" step="50" id="N">
-            <div class="help-text">More individuals → more precise estimates</div>
-
-            <label title="Number of time periods observed for each individual">Time Periods (T): <span id="lblT"></span></label>
-            <input type="range" min="2" max="15" step="1" id="T">
-            <div class="help-text">More periods → better within-person variation for FE</div>
-          </div>
-
-          <!-- True Effect - Open by default -->
-          <div class="collapsible open mt-3" id="coll-effect">True Causal Effect</div>
-          <div class="collapse-content show" id="content-effect">
-            <label title="The true causal effect of treatment D on outcome Y">True β (causal effect): <span id="lblB"></span></label>
-            <input type="range" min="-2" max="2" step="0.05" id="betaTrue">
-            <div class="help-text">The "ground truth" we're trying to estimate. Compare β̂ to this.</div>
-          </div>
-
-          <!-- Selection - Open by default (key for demonstrating bias) -->
-          <div class="collapsible open mt-3" id="coll-selection">Selection into Treatment</div>
-          <div class="collapse-content show" id="content-selection">
-            <label title="Base probability of receiving treatment">Base P(D=1): <span id="lblP"></span></label>
-            <input type="range" min="0.1" max="0.9" step="0.05" id="pBase">
-            <div class="help-text">Overall treatment prevalence when there's no selection.</div>
-
-            <label title="How strongly individual effects predict treatment selection">Selection Strength (ρ): <span id="lblRho"></span></label>
-            <input type="range" min="0" max="2" step="0.05" id="rhoSel">
-            <div class="help-text"><strong>Key!</strong> ρ > 0 → selection bias in OLS; FE corrects this.</div>
-
-            <label title="Probability of switching treatment status between waves">Switching Rate: <span id="lblSw"></span></label>
-            <input type="range" min="0" max="0.8" step="0.05" id="switchRate">
-            <div class="help-text">Higher → more within-person variation → more FE power.</div>
-          </div>
-
-          <!-- Variance - Collapsed by default -->
-          <div class="collapsible mt-3" id="coll-variance">Variance Components</div>
-          <div class="collapse-content" id="content-variance">
-            <label title="Standard deviation of time-invariant individual effects (unobserved heterogeneity)">Between-person SD (σ<sub>u</sub>): <span id="lblSu"></span></label>
-            <input type="range" min="0" max="3" step="0.05" id="sigmaU">
-            <div class="help-text">Unobserved individual factors. FE removes these; RE assumes uncorrelated with D.</div>
-
-            <label title="Standard deviation of time-varying idiosyncratic errors">Within-person SD (σ<sub>ε</sub>): <span id="lblSe"></span></label>
-            <input type="range" min="0.1" max="3" step="0.05" id="sigmaE">
-            <div class="help-text">Random shocks varying across time (transitory variation).</div>
-
-            <label title="Standard deviation of measurement error in the outcome">Measurement Error (σ<sub>me</sub>): <span id="lblSme"></span></label>
-            <input type="range" min="0" max="2" step="0.05" id="sigmaME">
-            <div class="help-text">Classical measurement error in Y. Adds noise, no bias.</div>
-          </div>
-
-          <!-- Heterogeneity - Collapsed by default -->
-          <div class="collapsible mt-3" id="coll-hetero">Heterogeneity &amp; Groups</div>
-          <div class="collapse-content" id="content-hetero">
-            <label title="Standard deviation of individual-specific treatment effects (random slopes)">Random slope SD (σ<sub>β</sub>): <span id="lblSb"></span></label>
-            <input type="range" min="0" max="2" step="0.05" id="sigmaB">
-            <div class="help-text">σ<sub>β</sub> > 0 means each person has their own effect around the mean.</div>
-
-            <label title="Number of subgroups for split regressions">Groups (G): <span id="lblG"></span></label>
-            <input type="range" min="1" max="5" step="1" id="nGroups">
-            <div class="help-text">Split sample into G groups for subgroup analysis.</div>
-
-            <label title="How much the mean treatment effect differs across groups">Group β spread (Δβ): <span id="lblGdb"></span></label>
-            <input type="range" min="0" max="2" step="0.05" id="groupDeltaBeta">
-            <div class="help-text">Systematic heterogeneity: groups have different average effects.</div>
-          </div>
-
-          <!-- Time Dynamics - Collapsed by default -->
-          <div class="collapsible mt-3" id="coll-time">Time Dynamics</div>
-          <div class="collapse-content" id="content-time">
-            <label style="justify-content:flex-start;gap:8px"><input type="checkbox" id="timeTrendOn"> Enable time trend</label>
-            <label title="Slope of linear time trend">Trend Slope (γ): <span id="lblTrend"></span></label>
-            <input type="range" min="0" max="0.3" step="0.01" id="timeTrendSlope">
-            <div class="help-text">Common time trend. Can bias estimates if correlated with D timing.</div>
-          </div>
-        </div>
-
-        <!-- Visualization & Estimation - Separate panel, collapsed sections -->
-        <div class="panel mt-3">
-          <h2>Visualization &amp; Estimation</h2>
-
-          <div class="collapsible" id="coll-viz">Visualization Options</div>
-          <div class="collapse-content" id="content-viz">
-            <label title="Which wave is used for the cross-sectional scatter plot">Scatter wave: <span id="lblScatterWave"></span></label>
-            <input type="range" min="1" max="15" step="1" id="scatterWave">
-            <div class="help-text">View any wave as a cross-section.</div>
-
-            <label title="How many individual trajectories to draw in the panel plot">Spaghetti lines: <span id="lblSpaghetti"></span></label>
-            <input type="range" min="5" max="80" step="5" id="spaghettiN">
-            <div class="help-text">More lines show more heterogeneity but can clutter.</div>
-
-            <label style="justify-content:flex-start;gap:8px"><input type="checkbox" id="colorByGroup"> Color points/lines by group</label>
-          </div>
-
-          <div class="collapsible mt-3" id="coll-estimation">Estimation Options</div>
-          <div class="collapse-content" id="content-estimation">
-            <label title="How standard errors are computed">Standard errors:</label>
+          <div class="param-group">
+            <div class="param-group-title">Standard errors (inference)</div>
             <select id="seType" aria-label="Standard error type">
               <option value="classical">Classical (i.i.d.)</option>
-              <option value="robust">Robust (HC1)</option>
-              <option value="cluster">Clustered by person (CR1)</option>
+              <option value="cluster" selected>Clustered by person (CR1)</option>
+              <option value="robust">Heteroskedasticity-robust (HC1)</option>
             </select>
-            <div class="help-text">Clustered SEs appropriate for panel data.</div>
+            <div class="help-text">Clustering by person is the defensible default for panels: it allows arbitrary within-person correlation. It changes the <em>confidence interval</em>, not the point estimate.</div>
+          </div>
+        </div>
 
-            <label style="justify-content:flex-start;gap:8px;margin-top:8px"><input type="checkbox" id="specTrend"> Include linear time term (t)</label>
-            <label style="justify-content:flex-start;gap:8px"><input type="checkbox" id="specQuad"> Include quadratic time term (t²)</label>
-            <label style="justify-content:flex-start;gap:8px"><input type="checkbox" id="specGroupFE"> Include group fixed effects</label>
+        <div class="panel mt-3">
+          <h2>The panel</h2>
+          <div id="dataSummary" class="muted" style="font-size:13px"></div>
+        </div>
 
-            <label title="Which model to use when splitting regressions by group" class="mt-2">Group split model:</label>
-            <select id="groupEstimator" aria-label="Estimator for split regressions">
-              <option value="pooled">Pooled OLS</option>
-              <option value="fe">Fixed Effects</option>
-              <option value="re">Random Effects</option>
-            </select>
+        <div class="panel mt-3">
+          <div class="collapsible open" id="coll-story">What to look for</div>
+          <div class="collapse-content show" id="content-story">
+            <p class="help-text" style="font-size:12px;line-height:1.6">
+              The union and marriage “premiums” look large in Pooled OLS, but <strong>shrink sharply</strong> once Fixed Effects removes stable person traits — evidence of <em>selection</em>: higher-wage men sort into unions and marriage. Meanwhile the <strong>return to schooling cannot be estimated by FE at all</strong>, because education is fixed within a person over these years. Open the Multiverse tab to see the full distribution.
+            </p>
           </div>
         </div>
       </div>
 
+      <!-- ============ MAIN: tabs ============ -->
       <div>
         <div class="panel">
           <div class="tabs">
-            <span id="viz-descr" class="chip active">📊 Data Overview</span>
-            <span id="viz-estimates" class="chip">📈 Estimator Comparison</span>
-            <span id="viz-diagnostics" class="chip">🔍 Model Diagnostics</span>
-            <span id="viz-learn" class="chip">📚 Methodology Guide</span>
+            <span id="viz-data" class="chip active">📊 Data Overview</span>
+            <span id="viz-multi" class="chip">🌌 Specification Curve</span>
+            <span id="viz-single" class="chip">🔬 Single-Spec Deep-Dive</span>
+            <span id="viz-export" class="chip">💾 Export &amp; Code</span>
+            <span id="viz-learn" class="chip">📚 Methodology</span>
           </div>
 
-          <!-- DATA OVERVIEW TAB -->
-          <div id="descrArea">
-            <div class="grid-2">
+          <!-- DATA OVERVIEW -->
+          <div id="dataArea">
+            <div class="objective">🎯 <strong>Objective:</strong> meet the data as people, and see <em>where the variation lives</em>. A regressor only has a <span class="term" title="Variation over time within the same person. Fixed Effects and First Differences use only this.">within-person</span> effect that Fixed Effects can estimate if it actually changes for the same person over time — count the <span class="term" title="People whose treatment status changes at least once during 1980–87. Within estimators identify the effect only from these.">switchers</span> below.</div>
+            <div class="cards" id="dataCards"></div>
+            <div class="grid-2 mt-4">
               <div>
-                <h2>Cross-Section: Selected Wave</h2>
-                <div class="chart" id="chart-scatter"></div>
-                <div class="legend">
-                  <span class="legend-item"><span class="legend-dot" style="background:#a3a3a3"></span> Observations</span>
-                  <span class="legend-item"><span class="legend-dot" style="background:#93c5fd"></span> OLS fit</span>
-                </div>
+                <h2>Descriptive statistics</h2>
+                <div class="panel" style="background:#0f0f0f;max-height:330px;overflow:auto"><div id="descTable"></div></div>
               </div>
               <div>
-                <h2>Panel Trajectories Over Time</h2>
-                <div class="chart" id="chart-lines"></div>
-                <div class="legend">
-                  <span class="legend-item"><span class="legend-dot" style="background:#6b7280"></span> Individual paths</span>
-                  <span class="legend-item"><span class="legend-dot" style="background:#93c5fd"></span> Mean</span>
-                  <span class="legend-item"><span class="legend-dot" style="background:#e5e7eb"></span> Median</span>
-                  <span class="legend-item"><span class="legend-dot" style="background:#a78bfa"></span> IQR</span>
-                </div>
+                <h2>Who identifies the effect? <span class="muted" style="font-size:12px">(switchers)</span></h2>
+                <div class="panel" style="background:#0f0f0f"><div id="switchTable"></div></div>
+                <p class="help-text mt-2" id="switchNote"></p>
               </div>
             </div>
             <div class="grid-2 mt-4">
               <div>
-                <h2>Mean Outcome by Wave &amp; Treatment</h2>
-                <div class="chart" id="chart-wave-means"></div>
+                <h2>Wage trajectories (real people)</h2>
+                <div class="chart" id="chart-spaghetti"></div>
                 <div class="legend">
-                  <span class="legend-item"><span class="legend-dot" style="background:#e5e7eb"></span> D=0 mean</span>
-                  <span class="legend-item"><span class="legend-dot" style="background:#60a5fa"></span> D=1 mean</span>
+                  <span class="legend-item"><span class="legend-dot" style="background:#4b5563"></span> 40 random workers</span>
+                  <span class="legend-item"><span class="legend-dot" style="background:#93c5fd"></span> overall mean</span>
+                  <span class="legend-item"><span class="legend-dot" style="background:#a78bfa"></span> IQR</span>
                 </div>
               </div>
               <div>
-                <h2>True Effect Heterogeneity (β<sub>i</sub>)</h2>
-                <div class="chart" id="chart-beta-dist"></div>
+                <h2>Distribution of <span id="distLabel">log wage</span></h2>
+                <div class="chart" id="chart-dist"></div>
+                <div class="legend"><span class="legend-item"><span class="legend-dot" style="background:#60a5fa"></span> all person-years</span></div>
+              </div>
+            </div>
+            <div class="grid-2 mt-4">
+              <div>
+                <h2>Mean outcome by focal status &amp; year</h2>
+                <div class="chart" id="chart-bygroup"></div>
                 <div class="legend">
-                  <span class="legend-item"><span class="legend-dot" style="background:#f87171"></span> Mean β</span>
-                  <span class="legend-item"><span class="legend-dot" style="background:#a3a3a3"></span> Individuals</span>
+                  <span class="legend-item"><span class="legend-dot" style="background:#60a5fa"></span> focal = 1</span>
+                  <span class="legend-item"><span class="legend-dot" style="background:#e5e7eb"></span> focal = 0</span>
                 </div>
+              </div>
+              <div>
+                <h2>Where is the variation?</h2>
+                <div class="chart" id="chart-variance"></div>
+                <p class="help-text mt-2" id="varianceNote"></p>
               </div>
             </div>
             <div class="interpretation">
-              <h4>What You're Seeing</h4>
-              <p><strong>Left:</strong> Cross-sectional snapshot using the selected wave. This is what you'd have without panel data. The slope shows the raw association between treatment and outcome.</p>
-              <p class="mt-2"><strong>Right:</strong> Individual trajectories over time. Faint lines show 20 random individuals; bold lines show aggregate statistics. Look for: (1) individual heterogeneity in levels, (2) within-person variation, (3) time trends.</p>
+              <h4>Reading this tab</h4>
+              <p><strong>Trajectories:</strong> each faint line is one man's wage path over up to 8 years. Panel data lets us watch the same person change — the engine of Fixed Effects.</p>
+              <p><strong>Where is the variation?</strong> For a regressor to be identified by Fixed Effects, it must vary <em>within</em> people over time. A bar that is almost all “between” (like schooling) cannot be estimated by FE.</p>
             </div>
           </div>
 
-          <!-- ESTIMATES TAB -->
-          <div id="estArea" style="display:none">
+          <!-- MULTIVERSE -->
+          <div id="multiArea" style="display:none">
+            <div class="objective">🎯 <strong>Objective:</strong> stop reporting one number. Build the <span class="term" title="The sorted set of estimates across all defensible analytic choices, shown with the choices that produced each.">specification curve</span> — every defensible analysis at once — and read its width, its drivers, and how much of it is significant.</div>
             <div class="grid-2">
-              <div>
-                <h2>Estimated β with 95% Confidence Intervals</h2>
-                <div class="chart" id="chart-bars"></div>
-                <div class="legend">
-                  <span class="legend-item"><span class="legend-dot" style="background:#f87171"></span> True β</span>
-                  <span class="legend-item"><span class="legend-dot" style="background:#60a5fa"></span> Estimate</span>
-                  <span class="legend-item" style="color:var(--muted)">Whiskers: 95% CI</span>
+              <div class="panel" style="background:#0f0f0f">
+                <h3>Which choices vary across the universe?</h3>
+                <div class="param-group">
+                  <div class="param-group-title">Estimators</div>
+                  <div id="axisEstimators"></div>
+                </div>
+                <div class="param-group">
+                  <div class="param-group-title">Controls (each toggled on/off)</div>
+                  <div id="axisControls"></div>
                 </div>
               </div>
+              <div class="panel" style="background:#0f0f0f">
+                <h3>More forks</h3>
+                <div class="param-group">
+                  <div class="param-group-title">Time effects</div>
+                  <label class="opt"><input type="checkbox" id="axisYearFE" checked> Vary year fixed effects (in / out)</label>
+                </div>
+                <div class="param-group">
+                  <div class="param-group-title">Sample definition</div>
+                  <label class="opt"><input type="checkbox" class="axisSample" value="full" checked> Full sample</label>
+                  <label class="opt"><input type="checkbox" class="axisSample" value="nohealth"> Drop poor-health person-years</label>
+                  <label class="opt"><input type="checkbox" class="axisSample" value="trim"> Trim 1%/99% outcome outliers</label>
+                </div>
+                <button class="btn btn-primary" id="btn-runmulti" style="width:100%">Build the multiverse →</button>
+                <div class="help-text mt-2" id="comboCount"></div>
+                <div class="param-group-title mt-3">Joint inference</div>
+                <button class="btn" id="btn-inference" style="width:100%">Test the whole curve (randomization, B=100)</button>
+                <div class="help-text mt-2" id="inferenceResult">Under the sharp null that the focal variable has no effect, its values are permuted across observations and the whole curve recomputed many times. Compares the observed curve to that null distribution.</div>
+              </div>
+            </div>
+
+            <div class="cards mt-4" id="multiCards"></div>
+
+            <div class="mt-4">
+              <h2>Specification curve</h2>
+              <div class="chart tall" id="chart-speccurve"></div>
+              <div class="legend">
+                <span class="legend-item"><span class="legend-dot" style="background:#60a5fa"></span> point estimate (CI as whisker)</span>
+                <span class="legend-item"><span class="legend-dot" style="background:#22c55e"></span> significant</span>
+                <span class="legend-item"><span class="legend-dot" style="background:#6b7280"></span> not significant</span>
+                <span class="legend-item"><span class="legend-dot" style="background:#f87171"></span> median</span>
+              </div>
+              <p class="help-text mt-2">Each dot is one full analysis, sorted from smallest to largest estimate. The lower grid marks which choices that specification used. A wide, choice-driven curve means the result is fragile; a flat curve means it is robust.</p>
+            </div>
+            <div id="inferenceBox" class="alert alert-info" style="display:none"></div>
+            <div id="multiInterpretation" class="interpretation"></div>
+          </div>
+
+          <!-- SINGLE SPEC -->
+          <div id="singleArea" style="display:none">
+            <div class="objective">🎯 <strong>Objective:</strong> open up one point on the curve. Compare all estimators side by side, read the <span class="term" title="Compares Fixed- and Random-Effects estimates; a significant difference means RE's exogeneity assumption fails and FE is preferred.">Hausman test</span>, watch the live equation change with each choice, and check the residual diagnostics — then defend (or abandon) the specification.</div>
+            <div class="grid-2">
+              <div class="panel" style="background:#0f0f0f">
+                <h3>Estimator</h3>
+                <select id="ssEstimator" aria-label="Estimator">
+                  <option value="pooled">Pooled OLS</option>
+                  <option value="between">Between (person means)</option>
+                  <option value="random">Random Effects</option>
+                  <option value="within" selected>Fixed Effects (within)</option>
+                  <option value="fd">First Differences</option>
+                  <option value="cre">Correlated RE (Mundlak)</option>
+                  <option value="twfe">Two-way FE (entity + time)</option>
+                </select>
+                <div class="param-group-title mt-3">Controls</div>
+                <div id="ssControls"></div>
+                <label class="opt mt-2"><input type="checkbox" id="ssYearFE"> Year fixed effects</label>
+                <div class="param-group-title mt-3">Sample</div>
+                <select id="ssSample" aria-label="Sample definition">
+                  <option value="full">Full sample</option>
+                  <option value="nohealth">Drop poor-health person-years</option>
+                  <option value="trim">Trim 1%/99% outcome outliers</option>
+                </select>
+                <div class="param-group-title mt-3">Bootstrap</div>
+                <button class="btn" id="btn-bootstrap" style="width:100%">Cluster-bootstrap focal CI (B=500)</button>
+                <div class="help-text mt-2" id="bootstrapResult">Block-resamples persons to get a CI for the focal coefficient of the selected estimator, free of distributional assumptions.</div>
+              </div>
               <div>
-                <h2>Variance Decomposition</h2>
-                <div class="panel" style="background:#0f0f0f">
-                  <table class="stat-table">
-                    <thead><tr><th>Component</th><th class="num">Value</th><th>Interpretation</th></tr></thead>
-                    <tbody id="varianceTable"></tbody>
-                  </table>
+                <h3>All five estimators, side by side</h3>
+                <div class="chart" id="chart-estbars"></div>
+                <div class="legend">
+                  <span class="legend-item"><span class="legend-dot" style="background:#60a5fa"></span> estimate (95% CI)</span>
+                  <span class="legend-item">grey = not identified</span>
                 </div>
                 <div class="panel mt-3" style="background:#0f0f0f">
-                  <h3>Hausman Test: FE vs RE</h3>
+                  <h3>Hausman test: FE vs RE</h3>
                   <div id="hausmanResult" class="mt-2"></div>
                 </div>
               </div>
             </div>
 
+            <div class="panel mt-4" id="eqPanel" style="background:#0f0f0f">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+                <h2 style="margin:0">⚙️ Under the hood — the equation being estimated</h2>
+                <label class="opt" style="margin:0;white-space:nowrap"><input type="checkbox" id="showEq" checked> show equations</label>
+              </div>
+              <div id="eqContent" class="mt-3"></div>
+            </div>
+
             <div class="mt-4">
-              <h2>Detailed Regression Results</h2>
-              <div class="tabs" style="margin-bottom:8px">
-                <span class="chip active" id="md-cs">Cross-Section</span>
-                <span class="chip" id="md-pooled">Pooled OLS</span>
-                <span class="chip" id="md-fe">Fixed Effects</span>
-                <span class="chip" id="md-re">Random Effects</span>
-              </div>
-              <div class="panel" style="background:#0f0f0f" id="modelDetailBox">
-                <div id="modelDetailContent"></div>
-              </div>
+              <h2>Regression output — <span id="ssTitle"></span></h2>
+              <div class="panel" style="background:#0f0f0f"><div id="ssTable"></div></div>
             </div>
 
-            <div class="grid-2 mt-4">
-              <div>
-                <h2>SE Sensitivity (Same β̂, Different SEs)</h2>
-                <div class="chart" id="chart-se-sensitivity"></div>
-                <p class="help-text muted mt-2">Compares classical vs robust vs clustered uncertainty for the currently selected model (above).</p>
-              </div>
-              <div>
-                <h2>Split Regressions by Group</h2>
-                <div class="chart" id="chart-group-split"></div>
-                <p class="help-text muted mt-2">Runs the selected estimator separately within each group (G) and plots β̂ with 95% CIs.</p>
-              </div>
+            <h2 class="mt-4">Residual diagnostics</h2>
+            <p class="muted" style="font-size:13px;margin-top:-2px">Do the model's residuals behave? Look for no pattern or funnel shape (left), an approximately symmetric bell (centre), and points on the line (right).</p>
+            <div class="grid-3 mt-2">
+              <div class="panel" style="background:#0f0f0f"><div class="chart diag" id="chart-rvf" role="img"></div><p class="help-text mt-2"><strong>Residuals vs fitted.</strong> A flat, patternless band supports linearity and constant variance; curvature or a funnel signals misspecification or heteroskedasticity.</p></div>
+              <div class="panel" style="background:#0f0f0f"><div class="chart diag" id="chart-hist" role="img"></div><p class="help-text mt-2"><strong>Residual distribution.</strong> Should be roughly symmetric and bell-shaped; the dashed curve is a fitted normal density for comparison.</p></div>
+              <div class="panel" style="background:#0f0f0f"><div class="chart diag" id="chart-qq" role="img"></div><p class="help-text mt-2"><strong>Normal Q–Q.</strong> Points on the reference line indicate normally distributed residuals; departures in the tails indicate skew or heavy tails.</p></div>
             </div>
-
-            <div id="biasAlert" class="mt-3"></div>
+            <div id="ssInterpretation" class="interpretation"></div>
           </div>
 
-          <!-- DIAGNOSTICS TAB -->
-          <div id="diagArea" style="display:none">
-            <div class="tabs" style="margin-bottom:12px">
-              <span class="muted" style="padding:5px 0;font-size:12px">Model:</span>
-              <span id="dg-cs" class="chip">Cross-Section</span>
-              <span id="dg-pooled" class="chip active">Pooled OLS</span>
-              <span id="dg-fe" class="chip">Fixed Effects</span>
-              <span id="dg-re" class="chip">Random Effects</span>
-            </div>
-            <div class="grid-3">
-              <div>
-                <h2>Residuals vs Fitted</h2>
-                <div class="chart" id="chart-rvf"></div>
-                <p class="help-text muted mt-2">Check for: non-linearity (curvature), heteroskedasticity (funnel shape)</p>
+          <!-- METHODOLOGY -->
+          <!-- EXPORT & CODE -->
+          <div id="exportArea" style="display:none">
+            <div class="alert alert-info">Everything here reflects the specification currently set in the <strong>Single-Spec Deep-Dive</strong> tab (estimator, controls, year effects, sample, and standard errors). Change it there, then return to export or copy the equivalent code.</div>
+            <h2 class="mt-3">Reproduce this specification in code</h2>
+            <p class="muted" style="font-size:13px">The point-and-click specification, translated into runnable code for the field's standard tools — the bridge from exploration to a reproducible script.</p>
+            <div class="grid-3 mt-2">
+              <div class="panel" style="background:#0f0f0f">
+                <div style="display:flex;justify-content:space-between;align-items:center"><h3>R · plm</h3><button class="btn" data-copy="code-r">Copy</button></div>
+                <pre class="formula" id="code-r" style="max-height:340px;overflow:auto"></pre>
               </div>
-              <div>
-                <h2>Residual Distribution</h2>
-                <div class="chart" id="chart-hist"></div>
-                <p class="help-text muted mt-2">Should be roughly symmetric and bell-shaped for valid inference</p>
+              <div class="panel" style="background:#0f0f0f">
+                <div style="display:flex;justify-content:space-between;align-items:center"><h3>Stata</h3><button class="btn" data-copy="code-stata">Copy</button></div>
+                <pre class="formula" id="code-stata" style="max-height:340px;overflow:auto"></pre>
               </div>
-              <div>
-                <h2>Normal Q-Q Plot</h2>
-                <div class="chart" id="chart-qq"></div>
-                <p class="help-text muted mt-2">Points should follow the diagonal line if residuals are normal</p>
+              <div class="panel" style="background:#0f0f0f">
+                <div style="display:flex;justify-content:space-between;align-items:center"><h3>Python · linearmodels</h3><button class="btn" data-copy="code-python">Copy</button></div>
+                <pre class="formula" id="code-python" style="max-height:340px;overflow:auto"></pre>
               </div>
             </div>
-            <div class="interpretation">
-              <h4>Diagnostic Interpretation</h4>
-              <p id="diagInterpretation">Select a model above to see its residual diagnostics. These plots help assess whether OLS assumptions hold.</p>
+
+            <h2 class="mt-4">Download</h2>
+            <div class="grid-3 mt-2">
+              <div class="panel" style="background:#0f0f0f">
+                <h3>Multiverse results</h3>
+                <p class="help-text">Every specification in the most recent build, with estimates, standard errors and 95% intervals.</p>
+                <button class="btn" id="dl-multiverse-csv" style="width:100%">Download multiverse CSV</button>
+              </div>
+              <div class="panel" style="background:#0f0f0f">
+                <h3>Figures</h3>
+                <p class="help-text">The specification curve (build it first on the Specification Curve tab).</p>
+                <button class="btn" id="dl-curve-svg" style="width:100%">Curve as SVG</button>
+                <button class="btn mt-2" id="dl-curve-png" style="width:100%">Curve as PNG</button>
+              </div>
+              <div class="panel" style="background:#0f0f0f">
+                <h3>Lab report</h3>
+                <p class="help-text">A self-contained HTML report: data summary, current specification, regression table, multiverse summary and figure.</p>
+                <button class="btn" id="dl-report" style="width:100%">Download HTML report</button>
+              </div>
             </div>
           </div>
 
-          <!-- METHODOLOGY GUIDE TAB -->
           <div id="learnArea" style="display:none">
-            <div class="collapsible open" id="coll-dgp">Data Generating Process (DGP)</div>
-            <div class="collapse-content show" id="content-dgp">
-              <p>The simulated data follows this model:</p>
-              <div class="formula">
-y<sub>it</sub> = α + β·D<sub>it</sub> + u<sub>i</sub> + ε<sub>it</sub> + γ·t + measurement error
+            <nav class="toc">
+              <span class="toc-label">On this page</span>
+              <a href="#doc-data">Data</a>
+              <a href="#doc-estimators">Estimators</a>
+              <a href="#doc-multi">Why a multiverse</a>
+              <a href="#doc-inference">Inference</a>
+              <a href="#doc-verify">Verification</a>
+              <a href="#doc-glossary">Glossary</a>
+              <a href="#doc-cite">How to cite</a>
+              <a href="#doc-refs">References</a>
+            </nav>
 
-where:
-  • y<sub>it</sub> = outcome for individual i at time t
-  • D<sub>it</sub> = binary treatment indicator (0 or 1)
-  • β = <strong>true causal effect</strong> (what we want to estimate)
-  • u<sub>i</sub> = individual fixed effect (time-invariant, unobserved)
-  • ε<sub>it</sub> = idiosyncratic error (varies by person and time)
-  • γ·t = time trend (if enabled)
-
-Selection mechanism:
-  P(D<sub>it</sub> = 1) = logistic(α + ρ·u<sub>i</sub>/σ<sub>u</sub>)
-
-When ρ > 0, individuals with higher u<sub>i</sub> are more likely to receive treatment,
-creating omitted variable bias in simple OLS.
-              </div>
-            </div>
-
-            <div class="collapsible mt-4" id="coll-estimators">The Four Estimators Compared</div>
-            <div class="collapse-content" id="content-estimators">
-              <table class="stat-table">
-                <thead>
-                  <tr><th>Estimator</th><th>What It Does</th><th>Key Assumption</th><th>When It Works</th></tr>
-                </thead>
+            <section class="doc-section" id="doc-data">
+              <h2>The data: the NLSY wage panel</h2>
+              <p class="doc-lead">545 young men from the U.S. National Longitudinal Survey of Youth, each observed every year from 1980 to 1987 — a balanced panel of 4,360 person-years. The extract comes from Vella &amp; Verbeek (1998) and is distributed in the <span class="pill">wooldridge</span> and <span class="pill">plm</span> R packages; this lab bundles a tidy copy.</p>
+              <table class="stat-table mt-3">
+                <thead><tr><th>Variable</th><th>Meaning</th><th>Varies within person?</th></tr></thead>
                 <tbody>
-                  <tr>
-                    <td><strong>Cross-Section OLS</strong></td>
-                    <td>Regress Y on D using wave 1 only</td>
-                    <td>E[u<sub>i</sub>|D<sub>i</sub>] = 0</td>
-                    <td>No selection on unobservables</td>
-                  </tr>
-                  <tr>
-                    <td><strong>Pooled OLS</strong></td>
-                    <td>Stack all waves, ignore panel structure</td>
-                    <td>E[u<sub>i</sub>|D<sub>it</sub>] = 0</td>
-                    <td>No selection; SEs may be wrong</td>
-                  </tr>
-                  <tr>
-                    <td><strong>Fixed Effects</strong></td>
-                    <td>Within-transformation: demean by individual</td>
-                    <td>E[ε<sub>it</sub>|D<sub>it</sub>, u<sub>i</sub>] = 0</td>
-                    <td>Selection on time-invariant factors OK</td>
-                  </tr>
-                  <tr>
-                    <td><strong>Random Effects</strong></td>
-                    <td>GLS with quasi-demeaning (θ)</td>
-                    <td>E[u<sub>i</sub>|D<sub>it</sub>] = 0 (RE exogeneity)</td>
-                    <td>No correlation between u<sub>i</sub> and D</td>
-                  </tr>
+                  <tr><td><strong>lwage</strong></td><td>log hourly wage (the outcome)</td><td>yes</td></tr>
+                  <tr><td><strong>union</strong></td><td>covered by a union contract</td><td>yes (men join/leave)</td></tr>
+                  <tr><td><strong>married</strong></td><td>currently married</td><td>yes</td></tr>
+                  <tr><td><strong>educ</strong></td><td>years of schooling</td><td><span class="badge badge-warning">no — fixed 1980–87</span></td></tr>
+                  <tr><td><strong>exper, expersq</strong></td><td>labour-market experience &amp; its square</td><td>yes</td></tr>
+                  <tr><td>hours, poorhlth, industry, region</td><td>time-varying controls</td><td>yes</td></tr>
+                  <tr><td>black, hisp</td><td>race / ethnicity</td><td>no</td></tr>
                 </tbody>
               </table>
-              <div class="alert alert-info mt-3">
-                <strong>Key insight:</strong> FE eliminates all time-invariant confounding (observed and unobserved) by using only within-person variation. The cost: we can't estimate effects of time-invariant variables, and we need within-person variation in treatment.
-              </div>
-            </div>
+            </section>
 
-            <div class="collapsible mt-4" id="coll-hausman">Understanding the Hausman Test</div>
-            <div class="collapse-content" id="content-hausman">
-              <p>The Hausman test compares FE and RE estimates:</p>
-              <div class="formula">
-H = (β<sub>FE</sub> - β<sub>RE</sub>)² / (Var(β<sub>FE</sub>) - Var(β<sub>RE</sub>))
+            <section class="doc-section" id="doc-estimators">
+              <h2>The estimators</h2>
+              <p>Each estimator sits at a different point on an identification spectrum, trading bias against what it can estimate at all.</p>
+              <table class="stat-table mt-3">
+                <thead><tr><th>Estimator</th><th>What it uses</th><th>Identifying assumption</th><th>Removes time-invariant confounding?</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>Pooled OLS</strong></td><td>all variation (within + between)</td><td>E[uᵢ | xᵢₜ] = 0</td><td>No</td></tr>
+                  <tr><td><strong>Between</strong></td><td>person means only (cross-person)</td><td>E[uᵢ | x̄ᵢ] = 0</td><td>No</td></tr>
+                  <tr><td><strong>Random Effects</strong></td><td>GLS weighting of within + between</td><td>E[uᵢ | xᵢₜ] = 0 (RE exogeneity)</td><td>No</td></tr>
+                  <tr><td><strong>Fixed Effects</strong> (within)</td><td>within-person deviations</td><td>E[εᵢₜ | xᵢₜ, uᵢ] = 0</td><td><span class="badge badge-success">Yes</span></td></tr>
+                  <tr><td><strong>First Differences</strong></td><td>year-to-year changes</td><td>E[Δεᵢₜ | Δxᵢₜ] = 0</td><td><span class="badge badge-success">Yes</span></td></tr>
+                  <tr><td><strong>Correlated RE</strong> (Mundlak)</td><td>RE + person-means of regressors</td><td>person-mean captures the correlation</td><td><span class="badge badge-success">Yes</span> (focal coef = FE)</td></tr>
+                  <tr><td><strong>Two-way FE</strong></td><td>within-person + year effects</td><td>E[εᵢₜ | xᵢₜ, uᵢ, λₜ] = 0</td><td><span class="badge badge-success">Yes</span> (+ common shocks)</td></tr>
+                </tbody>
+              </table>
+              <div class="formula mt-3">yᵢₜ = α + β·xᵢₜ + uᵢ + εᵢₜ      (uᵢ = stable person trait, unobserved)
 
-Under H₀: RE is consistent (no correlation between u<sub>i</sub> and D<sub>it</sub>)
-Under H₁: RE is inconsistent, FE is preferred
+Fixed Effects subtracts each person's own average:
+   (yᵢₜ − ȳᵢ) = β·(xᵢₜ − x̄ᵢ) + (εᵢₜ − ε̄ᵢ)      ← uᵢ cancels.
+
+If xᵢₜ never changes for a person (e.g. educ), then xᵢₜ − x̄ᵢ = 0 for every
+observation, so β is <strong>not identified</strong>. This is why Fixed Effects and
+First Differences drop the return to schooling — and why the Mundlak device, which
+adds the person-mean x̄ᵢ to a random-effects model, recovers exactly the FE coefficient.</div>
+              <div class="alert alert-info mt-3" style="font-size:13px;line-height:1.7">
+                <strong>Notation.</strong> Subscript <strong>i</strong> indexes a person (unit) and <strong>t</strong> a year (time), so <strong>x<sub>it</sub></strong> is “variable x for person i in year t.”
+                <strong>y</strong> is the outcome, <strong>x</strong> the regressor of interest, <strong>α</strong> the intercept (baseline), <strong>β</strong> the effect being estimated, <strong>u<sub>i</sub></strong> the time-invariant <em>person effect</em> (stable unobserved traits), <strong>ε<sub>it</sub></strong> the <em>idiosyncratic error</em> (random year-to-year variation), and <strong>λ<sub>t</sub></strong> a year effect common to everyone.
+                An <strong>overbar</strong> (x̄<sub>i</sub>) denotes a person's average over their years. The identifying assumptions in the table are written as conditional expectations: <strong>E[ε | x] = 0</strong> reads “the error has zero mean given the regressors” — i.e. the regressors are uncorrelated with what is left out.
               </div>
-              <p class="mt-2"><strong>Interpretation:</strong></p>
-              <ul style="margin:8px 0 0 20px;color:var(--muted)">
-                <li>Large H (small p-value): Reject H₀ → use FE</li>
-                <li>Small H (large p-value): Can't reject → RE may be more efficient</li>
-                <li>FE is always consistent; RE is more efficient when valid</li>
+            </section>
+
+            <section class="doc-section" id="doc-multi">
+              <h2>Why a multiverse?</h2>
+              <p>A single regression hides a decision tree: which estimator, which controls, which sample, which standard errors. Each branch is defensible, yet they can give different answers. A <strong>specification curve</strong> (Simonsohn, Simmons &amp; Nelson, 2020) or <strong>multiverse analysis</strong> (Steegen et al., 2016) reports the <em>whole distribution</em> of estimates instead of one cherry-picked number, making analytic flexibility — and its limits — visible.</p>
+              <div class="alert alert-info mt-3"><strong>Teaching use.</strong> Ask students to predict the curve before building it: Will the union premium survive Fixed Effects? Does adding industry controls matter? Is the schooling return robust? Then test each belief against the universe.</div>
+            </section>
+
+            <section class="doc-section" id="doc-inference">
+              <h2>Inference: from one CI to the whole curve</h2>
+              <p>The lab offers three covariance estimators (classical i.i.d., heteroskedasticity-robust HC1, and cluster-robust by person CR1), an assumption-free <strong>cluster bootstrap</strong> that block-resamples persons, and a full <strong>Hausman test</strong> comparing Fixed and Random Effects jointly over their common coefficients. For the multiverse as a whole, a <strong>randomization test</strong> permutes the focal variable under the sharp null of no effect, recomputes the entire curve many times, and asks how often the null reproduces a median estimate (or count of significant results) as extreme as the one observed.</p>
+            </section>
+
+            <section class="doc-section" id="doc-verify">
+              <h2>Verification — honest numerics</h2>
+              <p>Every estimator is implemented from textbook formulas in plain JavaScript and <strong>independently reproduced in two languages</strong>: R (<span class="pill">plm</span>) and Python (<span class="pill">linearmodels</span>). Across all 1,440 specifications of the default multiverse, the pooled, between, fixed-effects and first-difference coefficients agree to better than 1×10⁻⁶ (R) and 5×10⁻⁷ (Python); random effects to 3×10⁻⁴. Benchmark focal coefficients (log wage on focal + experience, full sample):</p>
+              <table class="stat-table mt-3">
+                <thead><tr><th>Effect</th><th class="num">Pooled</th><th class="num">Between</th><th class="num">RE</th><th class="num">FE</th><th class="num">FD</th></tr></thead>
+                <tbody>
+                  <tr><td>Union premium</td><td class="num">0.167</td><td class="num">0.257</td><td class="num">0.102</td><td class="num">0.083</td><td class="num">0.043</td></tr>
+                  <tr><td>Marriage premium</td><td class="num">0.164</td><td class="num">0.220</td><td class="num">0.077</td><td class="num">0.047</td><td class="num">0.038</td></tr>
+                  <tr><td>Return to schooling</td><td class="num">0.102</td><td class="num">0.099</td><td class="num">0.103</td><td class="num">—</td><td class="num">—</td></tr>
+                </tbody>
+              </table>
+              <p class="help-text mt-2">The Hausman test in the Deep-Dive is the full joint test over all common time-varying coefficients (matching R's <span class="pill">phtest</span>), computed with classical covariance as the theory requires.</p>
+            </section>
+
+            <section class="doc-section" id="doc-glossary">
+              <h2>Glossary</h2>
+              <dl class="glossary">
+                <div><dt>Within variation</dt><dd>How much a variable changes <em>for the same person</em> over time. Fixed Effects and First Differences use only this.</dd></div>
+                <div><dt>Between variation</dt><dd>Differences in person <em>averages</em> across people. The Between estimator uses only this; Fixed Effects discards it.</dd></div>
+                <div><dt>Time-invariant regressor</dt><dd>A variable that never changes within a person (e.g. years of schooling here). Within estimators cannot identify its effect.</dd></div>
+                <div><dt>Selection on unobservables</dt><dd>When who "gets treated" (e.g. joins a union) is correlated with stable unobserved traits, biasing estimators that use between variation.</dd></div>
+                <div><dt>θ (theta)</dt><dd>The random-effects quasi-demeaning weight: θ=0 gives Pooled OLS, θ→1 approaches Fixed Effects.</dd></div>
+                <div><dt>Hausman test</dt><dd>Compares Fixed- and Random-Effects coefficients; a significant difference favours Fixed Effects (RE's exogeneity assumption fails).</dd></div>
+                <div><dt>Specification curve</dt><dd>The sorted set of estimates across all defensible analytic choices, plotted with the choices that produced each one.</dd></div>
+                <div><dt>Researcher degrees of freedom</dt><dd>The many defensible choices in an analysis whose combination can move the headline result.</dd></div>
+              </dl>
+            </section>
+
+            <section class="doc-section" id="doc-cite">
+              <h2>How to cite</h2>
+              <p>If you use this lab in teaching or research, please cite it and the underlying data:</p>
+              <div class="formula" style="white-space:pre-wrap">Schoenholzer, K. (2026). Panel Data Multiverse Lab: a reproducible specification-curve
+approach to panel-data estimation [software]. https://kevinschoenholzer.com/sim-paneldata/
+
+Vella, F. &amp; Verbeek, M. (1998). Whose wages do unions raise? Journal of Applied
+Econometrics, 13(2), 163–183.   [the bundled NLSY wage-panel extract]</div>
+              <p class="help-text mt-2">The estimators are verified against R's <span class="pill">plm</span> and Python's <span class="pill">linearmodels</span>; the data ships under the terms of the public-use NLSY extract distributed in the <span class="pill">wooldridge</span> and <span class="pill">plm</span> packages.</p>
+            </section>
+
+            <section class="doc-section" id="doc-refs">
+              <h2>References</h2>
+              <ul style="margin:0 0 0 18px;color:var(--muted);font-size:13px;line-height:1.8">
+                <li>Vella, F. &amp; Verbeek, M. (1998). Whose wages do unions raise? <em>Journal of Applied Econometrics</em>, 13(2), 163–183. <span class="muted">(source of the NLSY extract)</span></li>
+                <li>Mundlak, Y. (1978). On the pooling of time series and cross section data. <em>Econometrica</em>, 46(1), 69–85.</li>
+                <li>Hausman, J. A. (1978). Specification tests in econometrics. <em>Econometrica</em>, 46(6), 1251–1271.</li>
+                <li>Wooldridge, J. M. (2010). <em>Econometric Analysis of Cross Section and Panel Data</em> (2nd ed.). MIT Press.</li>
+                <li>Croissant, Y. &amp; Millo, G. (2008). Panel data econometrics in R: the plm package. <em>Journal of Statistical Software</em>, 27(2).</li>
+                <li>Simonsohn, U., Simmons, J. P. &amp; Nelson, L. D. (2020). Specification curve analysis. <em>Nature Human Behaviour</em>, 4, 1208–1214.</li>
+                <li>Steegen, S., Tuerlinckx, F., Gelman, A. &amp; Vanpaemel, W. (2016). Increasing transparency through a multiverse analysis. <em>Perspectives on Psychological Science</em>, 11(5), 702–712.</li>
               </ul>
-            </div>
-
-            <div class="collapsible mt-4" id="coll-bias">Sources of Bias</div>
-            <div class="collapse-content" id="content-bias">
-              <table class="stat-table">
-                <thead><tr><th>Problem</th><th>Effect on OLS</th><th>Solution</th></tr></thead>
-                <tbody>
-                  <tr>
-                    <td>Selection on unobservables (ρ > 0)</td>
-                    <td>Upward or downward bias</td>
-                    <td>FE, IV, or design-based ID</td>
-                  </tr>
-                  <tr>
-                    <td>Time trends</td>
-                    <td>Spurious correlation if D trends</td>
-                    <td>Include time fixed effects</td>
-                  </tr>
-                  <tr>
-                    <td>Measurement error in Y</td>
-                    <td>Larger SEs, no bias in β</td>
-                    <td>Better measures, larger N</td>
-                  </tr>
-                  <tr>
-                    <td>Measurement error in D</td>
-                    <td>Attenuation bias toward 0</td>
-                    <td>IV, validation studies</td>
-                  </tr>
-                  <tr>
-                    <td>Reverse causality</td>
-                    <td>Bias direction depends on sign</td>
-                    <td>Lagged D, IV, timing</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div class="collapsible mt-4" id="coll-practice">Practical Recommendations</div>
-            <div class="collapse-content" id="content-practice">
-              <ol style="margin:0 0 0 20px;color:var(--text)">
-                <li class="mt-2"><strong>Always start with descriptives:</strong> Plot the data, understand variation patterns</li>
-                <li class="mt-2"><strong>Compare estimators:</strong> Large differences suggest selection bias</li>
-                <li class="mt-2"><strong>Run Hausman test:</strong> Formally test FE vs RE</li>
-                <li class="mt-2"><strong>Check diagnostics:</strong> Residual plots reveal model misspecification</li>
-                <li class="mt-2"><strong>Use cluster-robust SEs:</strong> Standard OLS SEs ignore within-person correlation</li>
-                <li class="mt-2"><strong>Consider time effects:</strong> Add wave dummies if outcomes trend over time</li>
-                <li class="mt-2"><strong>Report multiple specifications:</strong> Sensitivity analysis builds credibility</li>
-              </ol>
-            </div>
+            </section>
           </div>
         </div>
 
-        <div class="panel mt-3" id="infoPanel">
-          <h2>Current Simulation Summary</h2>
-          <div id="summaryContent" class="mt-2"></div>
-        </div>
-
-        <div class="cards mt-3" id="cards"></div>
+        <div class="panel mt-3"><div id="statusBar" class="muted" style="font-size:12px"></div></div>
       </div>
     </div>
   </section>
 
+  <div id="figModal" role="dialog" aria-modal="true" aria-label="Enlarged figure">
+    <div id="figModalInner">
+      <div class="bar"><h3 id="figModalTitle"></h3><button id="figClose" aria-label="Close">✕ Close</button></div>
+      <div id="figModalBody"></div>
+      <p class="help-text" id="figModalCap" style="margin-top:10px"></p>
+    </div>
+  </div>
+
+  <div id="lessonBar">
+    <div class="inner">
+      <div class="step-text"><div class="step-n" id="lessonStepN"></div><div id="lessonStepText"></div></div>
+      <button class="btn" id="lessonPrev">← Back</button>
+      <button class="btn btn-primary" id="lessonNext">Next →</button>
+      <button class="btn" id="lessonClose" aria-label="Close lesson">✕</button>
+    </div>
+  </div>
+
   <footer class="muted">
     <p style="font-size:12px">
-      <strong>Panel Data Simulation Lab</strong> — All data is synthetically generated.
-      Learning tool developed by Kevin Schoenholzer with AI coding assistance. Open Source. 2025.
+      <strong>Panel Data Multiverse Lab</strong> — real NLSY wage-panel data (Vella &amp; Verbeek 1998; via the <span class="pill">wooldridge</span>/<span class="pill">plm</span> R packages). Estimates computed client-side and verified against R's plm. Built by Kevin Schoenholzer with AI coding assistance. Open source. 2026.
     </p>
   </footer>
 </div>
 
-<script src="app.js"></script>
+<script src="engine.js?v=20260528"></script>
+<script src="exports.js?v=20260528"></script>
+<script src="app.js?v=20260528"></script>
 </body>
 </html>

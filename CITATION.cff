@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "Panel Data Multiverse Lab: A Browser-Based Tool for Teaching Panel-Data Estimation and the Fragility of Empirical Results"
+authors:
+  - family-names: Schoenholzer
+    given-names: Kevin
+    orcid: "https://orcid.org/0000-0001-9892-5869"
+    affiliation: "Università della Svizzera italiana (USI)"
+    email: kevin.schoenholzer@usi.ch
+version: "1.0.0"
+date-released: "2026-05-26"
+license: MIT
+url: "https://kevinschoenholzer.com/sim-paneldata/"
+repository-code: "https://github.com/kevisc/panel-data-multiverse"
+keywords:
+  - econometrics
+  - panel data
+  - fixed effects
+  - random effects
+  - specification curve
+  - multiverse analysis
+  - researcher degrees of freedom
+  - reproducibility
+  - teaching tool
+  - active learning
+abstract: >-
+  The Panel Data Multiverse Lab is a free, open-source, browser-based tool for
+  teaching panel-data econometrics and the fragility of empirical estimates.
+  Using a real longitudinal wage panel (the NLSY extract of Vella and Verbeek,
+  1998), students build the full specification curve implied by reasonable
+  choices of estimator (pooled OLS, between, random effects, fixed effects,
+  first differences, correlated random effects, and two-way fixed effects),
+  controls, sample, and standard errors. All computation runs client-side with
+  no installation or programming, every estimator is verified against R's plm
+  and Python's linearmodels across all 1,440 specifications, and the tool
+  generates equivalent R/Stata/Python code, exportable figures and reports, a
+  live equation panel, a guided lesson, and self-check questions.

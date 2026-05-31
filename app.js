@@ -1,1817 +1,813 @@
 "use strict";
+/* app.js — DOM/UI/charts for the Panel Data Multiverse Lab. Numeric core: engine.js (window.PanelEngine). */
+var E = window.PanelEngine;
 
-// ============== UTILITY FUNCTIONS ==============
-function mulberry32(a) {
-  return function() {
-    var t = a += 0x6d2b79f5;
-    t = Math.imul(t ^ t >>> 15, t | 1);
-    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
-}
-
-function logistic(z) { return 1 / (1 + Math.exp(-z)); }
-function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
-function mean(a) { return a.length ? a.reduce((x, y) => x + y, 0) / a.length : NaN; }
-function variance(a) {
-  var n = a.length;
-  if (n <= 1) return 0;
-  var m = mean(a), s = 0;
-  for (var i = 0; i < n; i++) { var v = a[i] - m; s += v * v; }
-  return s / (n - 1);
-}
-function quantile(a, q) {
-  if (!a.length) return NaN;
-  var s = a.slice().sort((x, y) => x - y);
-  var p = (s.length - 1) * q;
-  var lo = Math.floor(p), hi = Math.ceil(p);
-  if (lo === hi) return s[lo];
-  return s[lo] * (hi - p) + s[hi] * (p - lo);
-}
-function rnorm(rng, m = 0, s = 1) {
-  var u = 0, v = 0;
-  while (u === 0) u = rng();
-  while (v === 0) v = rng();
-  var z = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
-  return m + s * z;
-}
-function fmt(x, d = 3) {
-  return (Number.isNaN(x) || x === void 0 || !isFinite(x)) ? "—" : Number(x).toFixed(d);
-}
-function ci(b, se) { return [b - 1.96 * (se || NaN), b + 1.96 * (se || NaN)]; }
-function pchisq(x, df) {
-  // Approximate chi-squared p-value using Wilson-Hilferty transformation
-  if (x <= 0 || df <= 0) return 1;
-  var z = Math.pow(x / df, 1/3) - (1 - 2 / (9 * df));
-  z /= Math.sqrt(2 / (9 * df));
-  // Standard normal CDF approximation
-  var t = 1 / (1 + 0.2316419 * Math.abs(z));
-  var d = 0.3989423 * Math.exp(-z * z / 2);
-  var p = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
-  return z > 0 ? p : 1 - p;
-}
-
-// ============== LINEAR ALGEBRA & REGRESSION ==============
-function pnorm(z) {
-  var t = 1 / (1 + 0.2316419 * Math.abs(z));
-  var d = 0.3989423 * Math.exp(-z * z / 2);
-  var p = 1 - d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
-  return z > 0 ? p : 1 - p;
-}
-
-function vecDot(a, b) {
-  var s = 0;
-  for (var i = 0; i < a.length; i++) s += a[i] * b[i];
-  return s;
-}
-function matIdentity(n) {
-  var I = new Array(n);
-  for (var i = 0; i < n; i++) {
-    var row = new Array(n).fill(0);
-    row[i] = 1;
-    I[i] = row;
-  }
-  return I;
-}
-function matClone(A) { return A.map(r => r.slice()); }
-function matTranspose(A) {
-  var n = A.length, k = A[0].length;
-  var T = new Array(k);
-  for (var j = 0; j < k; j++) {
-    var row = new Array(n);
-    for (var i = 0; i < n; i++) row[i] = A[i][j];
-    T[j] = row;
-  }
-  return T;
-}
-function matMul(A, B) {
-  var n = A.length, k = A[0].length, m = B[0].length;
-  var out = new Array(n);
-  for (var i = 0; i < n; i++) {
-    var row = new Array(m).fill(0);
-    for (var t = 0; t < k; t++) {
-      var a = A[i][t];
-      if (a === 0) continue;
-      for (var j = 0; j < m; j++) row[j] += a * B[t][j];
-    }
-    out[i] = row;
-  }
-  return out;
-}
-function matVecMul(A, v) {
-  var n = A.length, k = A[0].length;
-  var out = new Array(n);
-  for (var i = 0; i < n; i++) {
-    var s = 0;
-    for (var j = 0; j < k; j++) s += A[i][j] * v[j];
-    out[i] = s;
-  }
-  return out;
-}
-function matScale(A, s) { return A.map(r => r.map(v => v * s)); }
-function matDiag(A) {
-  var d = new Array(A.length);
-  for (var i = 0; i < A.length; i++) d[i] = A[i][i];
-  return d;
-}
-
-function matInverse(A) {
-  var n = A.length;
-  var M = matClone(A);
-  var I = matIdentity(n);
-  for (var col = 0; col < n; col++) {
-    var pivotRow = col;
-    var best = Math.abs(M[col][col]);
-    for (var r = col + 1; r < n; r++) {
-      var v = Math.abs(M[r][col]);
-      if (v > best) { best = v; pivotRow = r; }
-    }
-    if (!isFinite(best) || best < 1e-12) return null;
-    if (pivotRow !== col) {
-      var tmp = M[col]; M[col] = M[pivotRow]; M[pivotRow] = tmp;
-      tmp = I[col]; I[col] = I[pivotRow]; I[pivotRow] = tmp;
-    }
-    var pivot = M[col][col];
-    for (var j = 0; j < n; j++) { M[col][j] /= pivot; I[col][j] /= pivot; }
-    for (r = 0; r < n; r++) {
-      if (r === col) continue;
-      var factor = M[r][col];
-      if (factor === 0) continue;
-      for (j = 0; j < n; j++) {
-        M[r][j] -= factor * M[col][j];
-        I[r][j] -= factor * I[col][j];
-      }
-    }
-  }
-  return I;
-}
-
-function ols(X, y, opts = {}) {
-  var n = y.length;
-  if (!n) return { beta: [], se: [], tstat: [], pval: [], fitted: [], resid: [], r2: NaN, rss: NaN, sigma2: NaN, vcov: [], n: 0, k: 0, df: 0, seType: opts.seType || "classical", coefNames: opts.coefNames || [] };
-  var k = X[0].length;
-  if (n <= k) return { beta: new Array(k).fill(NaN), se: new Array(k).fill(NaN), tstat: new Array(k).fill(NaN), pval: new Array(k).fill(NaN), fitted: [], resid: [], r2: NaN, rss: NaN, sigma2: NaN, vcov: [], n, k, df: 0, seType: opts.seType || "classical", coefNames: opts.coefNames || [] };
-
-  var Xt = matTranspose(X);
-  var XtX = matMul(Xt, X);
-  var XtXinv = matInverse(XtX);
-  if (!XtXinv) return { beta: new Array(k).fill(NaN), se: new Array(k).fill(NaN), tstat: new Array(k).fill(NaN), pval: new Array(k).fill(NaN), fitted: [], resid: [], r2: NaN, rss: NaN, sigma2: NaN, vcov: [], n, k, df: 0, seType: opts.seType || "classical", coefNames: opts.coefNames || [] };
-
-  var Xty = new Array(k).fill(0);
-  for (var j = 0; j < k; j++) Xty[j] = vecDot(Xt[j], y);
-  var beta = matVecMul(XtXinv, Xty);
-
-  var fitted = matVecMul(X, beta);
-  var resid = new Array(n);
-  var rss = 0;
-  var my = mean(y);
-  var tss = 0;
-  for (var i = 0; i < n; i++) {
-    var r = y[i] - fitted[i];
-    resid[i] = r;
-    rss += r * r;
-    var dy = y[i] - my;
-    tss += dy * dy;
-  }
-  var df = Math.max(1, (opts.df != null ? opts.df : (n - k)));
-  var sigma2 = rss / df;
-
-  var seType = opts.seType || "classical";
-  var vcov;
-  if (seType === "classical") {
-    vcov = matScale(XtXinv, sigma2);
-  } else if (seType === "robust") {
-    var meat = new Array(k);
-    for (i = 0; i < k; i++) meat[i] = new Array(k).fill(0);
-    for (i = 0; i < n; i++) {
-      var u = resid[i];
-      var wi = u * u;
-      for (var a = 0; a < k; a++) {
-        var xa = X[i][a];
-        for (var b = 0; b < k; b++) meat[a][b] += wi * xa * X[i][b];
-      }
-    }
-    vcov = matMul(matMul(XtXinv, meat), XtXinv);
-    vcov = matScale(vcov, n / df); // HC1 adjustment
-  } else if (seType === "cluster") {
-    var clusterIds = opts.clusterIds || [];
-    var by = {};
-    for (i = 0; i < n; i++) {
-      var cid = String(clusterIds[i]);
-      if (!by[cid]) by[cid] = [];
-      by[cid].push(i);
-    }
-    var groups = Object.keys(by);
-    var G = groups.length;
-    if (G < 2) {
-      vcov = new Array(k);
-      for (i = 0; i < k; i++) vcov[i] = new Array(k).fill(NaN);
-    } else {
-      var meatC = new Array(k);
-      for (i = 0; i < k; i++) meatC[i] = new Array(k).fill(0);
-      for (var g = 0; g < G; g++) {
-        var idxs = by[groups[g]];
-        var svec = new Array(k).fill(0);
-        for (var ii = 0; ii < idxs.length; ii++) {
-          var rowIdx = idxs[ii];
-          var ui = resid[rowIdx];
-          for (j = 0; j < k; j++) svec[j] += X[rowIdx][j] * ui;
-        }
-        for (var a2 = 0; a2 < k; a2++) for (var b2 = 0; b2 < k; b2++) meatC[a2][b2] += svec[a2] * svec[b2];
-      }
-      vcov = matMul(matMul(XtXinv, meatC), XtXinv);
-      var adj = (G / (G - 1)) * ((n - 1) / df);
-      vcov = matScale(vcov, adj);
-    }
-  } else {
-    vcov = matScale(XtXinv, sigma2);
-    seType = "classical";
-  }
-
-  var se = matDiag(vcov).map(v => (v >= 0 ? Math.sqrt(v) : NaN));
-  var tstat = new Array(k), pval = new Array(k);
-  for (j = 0; j < k; j++) {
-    tstat[j] = se[j] > 0 ? beta[j] / se[j] : NaN;
-    pval[j] = isFinite(tstat[j]) ? 2 * (1 - pnorm(Math.abs(tstat[j]))) : NaN;
-  }
-
-  var r2 = tss > 0 ? 1 - rss / tss : NaN;
-  return { beta, se, tstat, pval, fitted, resid, r2, rss, sigma2, vcov, n, k, df, seType, coefNames: opts.coefNames || [] };
-}
-
-function feWithin(ids, X, y, opts = {}) {
-  var n = y.length;
-  if (!n) return { beta: [], se: [], tstat: [], pval: [], fitted: [], resid: [], r2: NaN, rss: NaN, sigma2: NaN, vcov: [], n: 0, k: 0, df: 0, seType: opts.seType || "classical", coefNames: opts.coefNames || [], nGroups: 0, Xw: [], Yw: [] };
-
-  var k = X[0].length;
-  var idxBy = {};
-  for (var i = 0; i < n; i++) {
-    var id = String(ids[i]);
-    if (!idxBy[id]) idxBy[id] = [];
-    idxBy[id].push(i);
-  }
-  var groups = Object.keys(idxBy);
-  var nGroups = groups.length;
-
-  var Xw = new Array(n);
-  var Yw = new Array(n);
-  for (var g = 0; g < nGroups; g++) {
-    var idxs = idxBy[groups[g]];
-    var my = 0;
-    var mx = new Array(k).fill(0);
-    for (i = 0; i < idxs.length; i++) {
-      var ii = idxs[i];
-      my += y[ii];
-      for (var j = 0; j < k; j++) mx[j] += X[ii][j];
-    }
-    my /= idxs.length;
-    for (j = 0; j < k; j++) mx[j] /= idxs.length;
-    for (i = 0; i < idxs.length; i++) {
-      ii = idxs[i];
-      Yw[ii] = y[ii] - my;
-      var row = new Array(k);
-      for (j = 0; j < k; j++) row[j] = X[ii][j] - mx[j];
-      Xw[ii] = row;
-    }
-  }
-
-  var df = n - nGroups - k;
-  var fit = ols(Xw, Yw, { seType: opts.seType, clusterIds: ids, df, coefNames: opts.coefNames || [] });
-  fit.nGroups = nGroups;
-  fit.Xw = Xw;
-  fit.Yw = Yw;
-  return fit;
-}
-
-function columnVariance(X, col) {
-  var n = X.length;
-  var m = 0;
-  for (var i = 0; i < n; i++) m += X[i][col];
-  m /= n;
-  var s = 0;
-  for (i = 0; i < n; i++) { var d = X[i][col] - m; s += d * d; }
-  return s / Math.max(1, n - 1);
-}
-
-function randomEffects(ids, X, y, opts = {}) {
-  var n = y.length;
-  if (!n) return { beta: [], se: [], tstat: [], pval: [], fitted: [], resid: [], r2: NaN, rss: NaN, sigma2: NaN, vcov: [], n: 0, k: 0, df: 0, seType: opts.seType || "classical", coefNames: opts.coefNames || [], nGroups: 0, theta: NaN, sigma_e2: NaN, sigma_u2: NaN, Xq: [], Yq: [] };
-
-  var k = X[0].length;
-  var idxBy = {};
-  for (var i = 0; i < n; i++) {
-    var id = String(ids[i]);
-    if (!idxBy[id]) idxBy[id] = [];
-    idxBy[id].push(i);
-  }
-  var groups = Object.keys(idxBy);
-  var N = groups.length;
-
-  var Ti = {};
-  var ybar = {};
-  var xbar = {};
-  for (var g = 0; g < N; g++) {
-    var gid = groups[g];
-    var idxs = idxBy[gid];
-    Ti[gid] = idxs.length;
-    var my = 0;
-    var mx = new Array(k).fill(0);
-    for (i = 0; i < idxs.length; i++) {
-      var ii = idxs[i];
-      my += y[ii];
-      for (var j = 0; j < k; j++) mx[j] += X[ii][j];
-    }
-    my /= idxs.length;
-    for (j = 0; j < k; j++) mx[j] /= idxs.length;
-    ybar[gid] = my;
-    xbar[gid] = mx;
-  }
-
-  // Estimate sigma_e^2 from within regression on time-varying regressors (drop intercept)
-  var XnoInt = X.map(r => r.slice(1));
-  var coefNamesNoInt = (opts.coefNames || []).slice(1);
-  var feFit = feWithin(ids, XnoInt, y, { seType: "classical", coefNames: coefNamesNoInt });
-  var dfw = Math.max(1, feFit.df || (n - N - (k - 1)));
-  var sigma_e2 = (feFit.rss || 0) / dfw;
-  if (!isFinite(sigma_e2) || sigma_e2 <= 0) sigma_e2 = 1e-6;
-
-  // Between regression to estimate sigma_u^2 (drop columns with ~0 variance across groups)
-  var Xb = new Array(N);
-  var yb = new Array(N);
-  for (g = 0; g < N; g++) {
-    gid = groups[g];
-    Xb[g] = xbar[gid].slice();
-    yb[g] = ybar[gid];
-  }
-  var keep = [];
-  for (var col = 0; col < k; col++) {
-    var vcol = columnVariance(Xb, col);
-    if (vcol > 1e-10) keep.push(col);
-  }
-  if (keep.length === 0) keep = [0];
-  var XbR = Xb.map(row => keep.map(c => row[c]));
-  var coefNamesB = keep.map(c => (opts.coefNames || [])[c] || ("x" + c));
-  var between = ols(XbR, yb, { seType: "classical", coefNames: coefNamesB });
-  var s2_between = (between.rss || 0) / Math.max(1, between.df || (N - XbR[0].length));
-  var Tbar = mean(Object.values(Ti));
-  var sigma_u2 = Math.max(0, s2_between - sigma_e2 / Math.max(1e-9, Tbar || 1));
-
-  // Quasi-demeaning
-  var Xq = new Array(n);
-  var Yq = new Array(n);
-  var thetaBy = {};
-  for (g = 0; g < N; g++) {
-    gid = groups[g];
-    var th = 1 - Math.sqrt(sigma_e2 / Math.max(1e-9, sigma_e2 + Ti[gid] * sigma_u2));
-    thetaBy[gid] = th;
-  }
-  for (i = 0; i < n; i++) {
-    gid = String(ids[i]);
-    var th2 = thetaBy[gid] || 0;
-    var xbRow = xbar[gid];
-    var rowQ = new Array(k);
-    for (j = 0; j < k; j++) rowQ[j] = X[i][j] - th2 * xbRow[j];
-    Xq[i] = rowQ;
-    Yq[i] = y[i] - th2 * ybar[gid];
-  }
-
-  var fit = ols(Xq, Yq, { seType: opts.seType, clusterIds: ids, coefNames: opts.coefNames || [] });
-  fit.theta = 1 - Math.sqrt(sigma_e2 / Math.max(1e-9, sigma_e2 + (Tbar || 1) * sigma_u2));
-  fit.sigma_e2 = sigma_e2;
-  fit.sigma_u2 = sigma_u2;
-  fit.nGroups = N;
-  fit.Xq = Xq;
-  fit.Yq = Yq;
-  return fit;
-}
-
-// ============== HAUSMAN TEST ==============
-function coefIndex(model, name) {
-  if (!model || !model.coefNames) return -1;
-  return model.coefNames.indexOf(name);
-}
-function coefAt(model, name) {
-  var idx = coefIndex(model, name);
-  if (idx < 0) return { b: NaN, se: NaN, var: NaN, idx };
-  var v = model.vcov && model.vcov[idx] ? model.vcov[idx][idx] : NaN;
-  return { b: model.beta[idx], se: model.se[idx], var: v, idx };
-}
-function hausmanTest(fe, re) {
-  var feD = coefAt(fe, "D");
-  var reD = coefAt(re, "D");
-  if (!isFinite(feD.b) || !isFinite(reD.b) || !isFinite(feD.var) || !isFinite(reD.var)) {
-    return { stat: NaN, pval: NaN, conclusion: "Cannot compute" };
-  }
-  var diff = feD.b - reD.b;
-  var varDiff = feD.var - reD.var;
-  if (varDiff <= 0) {
-    return { stat: NaN, pval: NaN, conclusion: "Variance difference non-positive; test unreliable" };
-  }
-  var H = diff * diff / varDiff;
-  var pval = pchisq(H, 1);
-  var conclusion = pval < 0.05
-    ? "Reject H₀ (p < 0.05): FE preferred (evidence of correlation between uᵢ and D)"
-    : "Cannot reject H₀: RE may be more efficient (no strong evidence of correlation)";
-  return { stat: H, pval, conclusion };
-}
-
-// ============== STATE & SIMULATION ==============
+// ============== STATE ==============
+var DATA = null;           // array of person-year records
+var META = null;           // { industryCats, regionCats, years }
 var S = {
-  seed: Math.floor(Math.random() * 100000),
-  N: 500,
-  T: 6,
-  betaTrue: 0.5,
-  sigmaB: 0.0,
-  nGroups: 1,
-  groupDeltaBeta: 0.0,
-  sigmaU: 1.0,
-  sigmaE: 1.0,
-  sigmaME: 0.2,
-  pBase: 0.5,
-  rhoSel: 0.8,
-  switchRate: 0.3,
-  timeTrendOn: false,
-  timeTrendSlope: 0.05,
-  scatterWave: 1,
-  spaghettiN: 20,
-  colorByGroup: false,
-  seType: "classical",
-  specTrend: false,
-  specQuad: false,
-  specGroupFE: false,
-  groupEstimator: "pooled",
-  viz: "descr",
-  modelDetail: "cs",
-  diagModel: "pooled"
+  focal: "union", outcome: "lwage", seType: "cluster", viz: "data",
+  ss: { estimator: "within", controls: { experience: true, hours: false, industry: false, region: false, health: false, race: false }, yearFE: false, sample: "full" },
+  axes: { estimators: ["pooled", "between", "random", "within", "fd"], controlsVary: ["experience", "industry", "region", "health"], yearFEVary: true, sampleVary: ["full"] },
+  multiResults: null, multiSummary: null, lessonStep: -1
 };
 
-function simulate() {
-  var rng = mulberry32(S.seed);
-  var persons = new Array(S.N);
-  for (var i = 0; i < S.N; i++) persons[i] = i;
-  var u = persons.map(() => rnorm(rng, 0, S.sigmaU));
-  var g = persons.map(() => (S.nGroups > 1 ? (1 + Math.floor(rng() * S.nGroups)) : 1));
-  function groupBetaShift(gi) {
-    if (S.nGroups <= 1) return 0;
-    var center = (S.nGroups + 1) / 2;
-    var denom = (S.nGroups - 1) / 2;
-    return denom > 0 ? S.groupDeltaBeta * ((gi - center) / denom) : 0;
-  }
-  var betaI = persons.map((_, idx) => S.betaTrue + groupBetaShift(g[idx]) + rnorm(rng, 0, S.sigmaB));
-  var alpha = Math.log(S.pBase / (1 - S.pBase));
-  var rows = [];
+var FOCAL_LABEL = { union: "union wage premium", married: "marriage wage premium", educ: "return to schooling" };
+var FOCAL_SHORT = { union: "union", married: "married", educ: "educ" };
+var FOCAL_HELP = {
+  union: "Do unionized workers earn more? Watch how much of the gap is selection — higher-paid men sorting into union jobs.",
+  married: "The “marriage premium”: married men out-earn single men. How much survives once we remove stable person traits?",
+  educ: "Returns to a year of schooling. Note: education is fixed over 1980–87, so Fixed Effects and First Differences cannot identify it."
+};
+var ESTIMATOR_LABEL = { pooled: "Pooled OLS", between: "Between", random: "Random Effects", within: "Fixed Effects", fd: "First Diff.", cre: "Correlated RE", twfe: "Two-way FE" };
+var CONTROL_LABEL = { experience: "experience (+²)", hours: "hours", industry: "industry", region: "region", health: "health", race: "race" };
+var SAMPLE_LABEL = { full: "full sample", nohealth: "drop poor health", trim: "trim 1/99% outliers" };
 
-  for (i = 0; i < S.N; i++) {
-    var p_i = clamp(logistic(alpha + S.rhoSel * (u[i] / (S.sigmaU || 1))), 0.01, 0.99);
-    var D = rng() < p_i ? 1 : 0;
-    for (var t = 0; t < S.T; t++) {
-      if (t > 0 && rng() < S.switchRate) D = rng() < p_i ? 1 : 0;
-      var trend = S.timeTrendOn ? S.timeTrendSlope * (t + 1) : 0;
-      var e_it = rnorm(rng, 0, S.sigmaE);
-      var yStar = betaI[i] * D + u[i] + e_it + trend;
-      var y = yStar + rnorm(rng, 0, S.sigmaME);
-      rows.push({ pid: i, gid: g[i], beta_i: betaI[i], wave: t + 1, D: D, u: u[i], e: e_it, y: y, yStar: yStar, trend: trend });
-    }
-  }
-  return rows;
+// ============== FORMAT / SMALL HELPERS ==============
+function fmt(x, d) { d = d == null ? 3 : d; return (x == null || Number.isNaN(x) || !isFinite(x)) ? "—" : Number(x).toFixed(d); }
+function ciOf(b, se) { return [b - 1.96 * se, b + 1.96 * se]; }
+function isSig(b, se) { if (!isFinite(se)) return false; var c = ciOf(b, se); return c[0] > 0 || c[1] < 0; }
+function outcomeKey() { return S.outcome === "wage" ? "wage" : "lwage"; }
+function outcomeLabel() { return S.outcome === "wage" ? "wage ($)" : "log wage"; }
+function $(id) { return document.getElementById(id); }
+
+// ============== SVG PRIMITIVES ==============
+var SVGNS = "http://www.w3.org/2000/svg";
+function svgEl(w, h) { var s = document.createElementNS(SVGNS, "svg"); s.setAttribute("viewBox", "0 0 " + w + " " + h); s.setAttribute("width", "100%"); s.setAttribute("height", "100%"); return s; }
+function line(x1, y1, x2, y2, stroke, sw) { var e = document.createElementNS(SVGNS, "line"); e.setAttribute("x1", x1); e.setAttribute("y1", y1); e.setAttribute("x2", x2); e.setAttribute("y2", y2); e.setAttribute("stroke", stroke || "#6b7280"); e.setAttribute("stroke-width", sw || 1); return e; }
+function rect(x, y, w, h, fill) { var e = document.createElementNS(SVGNS, "rect"); e.setAttribute("x", x); e.setAttribute("y", y); e.setAttribute("width", w); e.setAttribute("height", h); e.setAttribute("fill", fill || "#60a5fa"); return e; }
+function circle(x, y, r, fill, op) { var e = document.createElementNS(SVGNS, "circle"); e.setAttribute("cx", x); e.setAttribute("cy", y); e.setAttribute("r", r); e.setAttribute("fill", fill || "#cbd5e1"); e.setAttribute("fill-opacity", op == null ? 0.85 : op); return e; }
+function polyline(points, stroke, sw, op) { var e = document.createElementNS(SVGNS, "polyline"); e.setAttribute("points", points.map(function (p) { return p[0] + "," + p[1]; }).join(" ")); e.setAttribute("fill", "none"); e.setAttribute("stroke", stroke || "#93c5fd"); e.setAttribute("stroke-width", sw || 1); e.setAttribute("stroke-opacity", op == null ? 1 : op); return e; }
+function txt(x, y, t, fill, fs, anchor) { var e = document.createElementNS(SVGNS, "text"); e.setAttribute("x", x); e.setAttribute("y", y); e.setAttribute("fill", fill || "#9aa0a6"); e.setAttribute("font-size", fs || 10); e.setAttribute("text-anchor", anchor || "middle"); e.textContent = t; return e; }
+function scaleLin(d0, d1, r0, r1) { var d = (d1 - d0) || 1e-9, m = (r1 - r0) / d; return function (v) { return r0 + (v - d0) * m; }; }
+function gridY(svg, m, w, h, n) { for (var i = 0; i <= n; i++) { var gy = m.t + i * (h - m.t - m.b) / n; svg.appendChild(line(m.l, gy, w - m.r, gy, "#1a1a1a", 1)); } }
+var CHART_TITLES = {
+  "chart-spaghetti": "Wage trajectories over time", "chart-dist": "Distribution of the outcome",
+  "chart-bygroup": "Mean outcome by focal status and year", "chart-variance": "Within- vs between-person variation",
+  "chart-speccurve": "Specification curve", "chart-estbars": "All estimators compared",
+  "chart-rvf": "Residuals vs fitted", "chart-hist": "Residual distribution", "chart-qq": "Normal Q–Q plot"
+};
+function setChart(id, svg) {
+  var c = $(id); c.innerHTML = ""; c.appendChild(svg);
+  var b = document.createElement("button"); b.className = "chart-expand"; b.type = "button";
+  b.setAttribute("aria-label", "Enlarge figure"); b.title = "Enlarge"; b.textContent = "⤢";
+  b.addEventListener("click", function (e) { e.stopPropagation(); openFig(id); });
+  c.appendChild(b);
+}
+function openFig(id) {
+  var c = $(id); if (!c) return; var svg = c.querySelector("svg"); if (!svg) return;
+  var clone = svg.cloneNode(true);
+  $("figModalBody").innerHTML = ""; $("figModalBody").appendChild(clone);
+  $("figModalTitle").textContent = CHART_TITLES[id] || "Figure";
+  $("figModalCap").textContent = c.getAttribute("aria-label") || "";
+  $("figModal").classList.add("open");
+}
+function closeFig() { $("figModal").classList.remove("open"); $("figModalBody").innerHTML = ""; }
+function emptyChart(id, msg) { $(id).innerHTML = "<div style='padding:24px;color:#6b7280'>" + (msg || "No data") + "</div>"; }
+function ariaChart(id, label) { var c = $(id); if (c) c.setAttribute("aria-label", label); }
+
+// "nice" round tick values spanning [lo,hi]
+function niceNum(x, round) {
+  if (x <= 0 || !isFinite(x)) return 1;
+  var e = Math.floor(Math.log(x) / Math.LN10), f = x / Math.pow(10, e), nf;
+  if (round) nf = f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10;
+  else nf = f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10;
+  return nf * Math.pow(10, e);
+}
+function niceTicks(lo, hi, n) {
+  n = n || 5; if (!(hi > lo)) { hi = lo + 1; }
+  var step = niceNum(niceNum(hi - lo, false) / (n - 1), true);
+  var glo = Math.floor(lo / step) * step, ghi = Math.ceil(hi / step) * step, t = [];
+  for (var v = glo; v <= ghi + step * 0.5; v += step) t.push(Math.abs(v) < step / 1e6 ? 0 : +v.toFixed(10));
+  return { ticks: t, lo: glo, hi: ghi, step: step };
+}
+function tickFmt(step) { var d = step >= 1 ? 0 : Math.min(4, Math.ceil(-Math.log(step) / Math.LN10) + 1); return function (v) { return v.toFixed(d); }; }
+// draw a full axis frame: gridlines, ticks, numeric labels, axis titles
+function plotFrame(svg, m, w, h, xs, ys, xt, yt, xTitle, yTitle) {
+  var x0 = m.l, x1 = w - m.r, yb = h - m.b, yt0 = m.t, xf = tickFmt(xt.step), yf = tickFmt(yt.step);
+  yt.ticks.forEach(function (v) { var y = ys(v); if (y < yt0 - 0.5 || y > yb + 0.5) return; svg.appendChild(line(x0, y, x1, y, "#1b1b1b", 1)); svg.appendChild(line(x0 - 4, y, x0, y, "#5b6472", 1)); svg.appendChild(txt(x0 - 7, y + 3.5, yf(v), "#9aa0a6", 11, "end")); });
+  xt.ticks.forEach(function (v) { var x = xs(v); if (x < x0 - 0.5 || x > x1 + 0.5) return; svg.appendChild(line(x, yt0, x, yb, "#1b1b1b", 1)); svg.appendChild(line(x, yb, x, yb + 4, "#5b6472", 1)); svg.appendChild(txt(x, yb + 16, xf(v), "#9aa0a6", 11, "middle")); });
+  svg.appendChild(line(x0, yb, x1, yb, "#6b7280", 1.2));
+  svg.appendChild(line(x0, yt0, x0, yb, "#6b7280", 1.2));
+  svg.appendChild(txt((x0 + x1) / 2, h - 6, xTitle, "#cbd5e1", 12, "middle"));
+  var yl = txt(13, (yt0 + yb) / 2, yTitle, "#cbd5e1", 12, "middle"); yl.setAttribute("transform", "rotate(-90 13 " + ((yt0 + yb) / 2) + ")"); svg.appendChild(yl);
 }
 
-// ============== LABELS & PRESETS ==============
-function updateLabels() {
-  document.getElementById("lblN").textContent = S.N;
-  document.getElementById("lblT").textContent = S.T;
-  document.getElementById("lblB").textContent = S.betaTrue.toFixed(2);
-  document.getElementById("lblSb").textContent = S.sigmaB.toFixed(2);
-  document.getElementById("lblG").textContent = String(S.nGroups);
-  document.getElementById("lblGdb").textContent = S.groupDeltaBeta.toFixed(2);
-  document.getElementById("lblSu").textContent = S.sigmaU.toFixed(2);
-  document.getElementById("lblSe").textContent = S.sigmaE.toFixed(2);
-  document.getElementById("lblSme").textContent = S.sigmaME.toFixed(2);
-  document.getElementById("lblP").textContent = S.pBase.toFixed(2);
-  document.getElementById("lblRho").textContent = S.rhoSel.toFixed(2);
-  document.getElementById("lblSw").textContent = S.switchRate.toFixed(2);
-  document.getElementById("lblTrend").textContent = S.timeTrendSlope.toFixed(2);
+// ============== META & GROUPING ==============
+function computeMeta(rows) {
+  function cats(key) { var c = {}; rows.forEach(function (r) { c[r[key]] = (c[r[key]] || 0) + 1; }); return Object.keys(c).sort(function (a, b) { return c[b] - c[a]; }); }
+  var years = Array.from(new Set(rows.map(function (r) { return r.year; }))).sort(function (a, b) { return a - b; });
+  return { industryCats: cats("industry"), regionCats: cats("region"), years: years };
+}
+function byPerson(rows) { var by = {}; rows.forEach(function (r) { (by[r.nr] || (by[r.nr] = [])).push(r); }); return by; }
 
-  var scatterEl = document.getElementById("scatterWave");
-  scatterEl.max = String(S.T);
-  if (S.scatterWave > S.T) S.scatterWave = S.T;
-  scatterEl.value = String(S.scatterWave);
-  document.getElementById("lblScatterWave").textContent = String(S.scatterWave);
-  document.getElementById("lblSpaghetti").textContent = String(S.spaghettiN);
+// variance decomposition: share of variation that is within-person vs between-person
+function varianceDecomp(rows, key) {
+  var by = byPerson(rows), grand = E.mean(rows.map(function (r) { return r[key]; }));
+  var ssb = 0, ssw = 0;
+  Object.keys(by).forEach(function (id) {
+    var g = by[id], mi = E.mean(g.map(function (r) { return r[key]; }));
+    ssb += g.length * (mi - grand) * (mi - grand);
+    g.forEach(function (r) { var d = r[key] - mi; ssw += d * d; });
+  });
+  var tot = ssb + ssw || 1;
+  return { within: ssw / tot, between: ssb / tot };
 }
 
-function applyPreset(name) {
-  // Keep presets focused on selection/trends/noise; reset heterogeneity add-ons.
-  S.sigmaB = 0;
-  S.nGroups = 1;
-  S.groupDeltaBeta = 0;
-
-  if (name === "Baseline (No Bias)") {
-    S.rhoSel = 0; S.pBase = 0.5; S.sigmaME = 0.2; S.timeTrendOn = false; S.switchRate = 0.4; S.sigmaU = 1.0;
-  } else if (name === "Selection Bias") {
-    S.rhoSel = 1.5; S.pBase = 0.5; S.sigmaME = 0.2; S.timeTrendOn = false; S.switchRate = 0.3; S.sigmaU = 1.2;
-  } else if (name === "RCT-like") {
-    S.rhoSel = 0.0; S.pBase = 0.5; S.switchRate = 0.5; S.timeTrendOn = false; S.sigmaME = 0.1;
-  } else if (name === "Noisy Survey") {
-    S.sigmaME = 1.0; S.sigmaE = 1.5; S.rhoSel = 0.3; S.timeTrendOn = false;
-  } else if (name === "Time Trend") {
-    S.timeTrendOn = true; S.timeTrendSlope = 0.15; S.rhoSel = 0.5;
-  } else if (name === "Low Within Variation") {
-    S.switchRate = 0.05; S.rhoSel = 0.8; S.timeTrendOn = false;
-  }
-  S.seed = Math.floor(Math.random() * 100000);
-  syncInputs();
-  computeAndRender();
+// ============== DATA OVERVIEW CHARTS ==============
+function drawSpaghetti() {
+  var key = outcomeKey(), by = byPerson(DATA), ids = Object.keys(by);
+  var pick = ids.slice().sort(function (a, b) { return (a * 7919) % 101 - (b * 7919) % 101; }).slice(0, 40);
+  var w = 480, h = 300, m = { l: 48, r: 12, t: 12, b: 34 };
+  var ys0 = DATA.map(function (r) { return r[key]; });
+  var yMin = Math.min.apply(null, ys0), yMax = Math.max.apply(null, ys0);
+  var pad = (yMax - yMin) * 0.05; yMin -= pad; yMax += pad;
+  var yrs = META.years, xs = scaleLin(yrs[0], yrs[yrs.length - 1], m.l, w - m.r), ys = scaleLin(yMin, yMax, h - m.b, m.t);
+  var svg = svgEl(w, h); gridY(svg, m, w, h, 6);
+  var means = [], p25 = [], p75 = [];
+  yrs.forEach(function (yr) { var v = DATA.filter(function (r) { return r.year === yr; }).map(function (r) { return r[key]; }); means.push([xs(yr), ys(E.mean(v))]); p25.push([xs(yr), ys(E.quantile(v, 0.25))]); p75.push([xs(yr), ys(E.quantile(v, 0.75))]); });
+  pick.forEach(function (id) { var pts = by[id].slice().sort(function (a, b) { return a.year - b.year; }).map(function (r) { return [xs(r.year), ys(r[key])]; }); svg.appendChild(polyline(pts, "#4b5563", 1, 0.4)); });
+  svg.appendChild(polyline(p25, "#a78bfa", 1.4, 0.9)); svg.appendChild(polyline(p75, "#a78bfa", 1.4, 0.9));
+  svg.appendChild(polyline(means, "#93c5fd", 2.6, 1));
+  svg.appendChild(line(m.l, h - m.b, w - m.r, h - m.b, "#374151", 1));
+  yrs.forEach(function (yr) { svg.appendChild(txt(xs(yr), h - m.b + 14, String(yr).slice(2), "#9aa0a6", 9)); });
+  [0, 0.5, 1].forEach(function (p) { svg.appendChild(txt(m.l - 6, ys(yMin + p * (yMax - yMin)) + 3, fmt(yMin + p * (yMax - yMin), 1), "#9aa0a6", 9, "end")); });
+  svg.appendChild(txt(w / 2, h - 4, "year", "#6b7280", 10));
+  setChart("chart-spaghetti", svg);
 }
 
-function syncInputs() {
-  document.getElementById("N").value = S.N;
-  document.getElementById("T").value = S.T;
-  document.getElementById("betaTrue").value = S.betaTrue;
-  document.getElementById("sigmaB").value = S.sigmaB;
-  document.getElementById("nGroups").value = S.nGroups;
-  document.getElementById("groupDeltaBeta").value = S.groupDeltaBeta;
-  document.getElementById("sigmaU").value = S.sigmaU;
-  document.getElementById("sigmaE").value = S.sigmaE;
-  document.getElementById("sigmaME").value = S.sigmaME;
-  document.getElementById("pBase").value = S.pBase;
-  document.getElementById("rhoSel").value = S.rhoSel;
-  document.getElementById("switchRate").value = S.switchRate;
-  document.getElementById("timeTrendSlope").value = S.timeTrendSlope;
-  document.getElementById("timeTrendOn").checked = S.timeTrendOn;
-  document.getElementById("scatterWave").value = S.scatterWave;
-  document.getElementById("spaghettiN").value = S.spaghettiN;
-  document.getElementById("colorByGroup").checked = S.colorByGroup;
-  document.getElementById("seType").value = S.seType;
-  document.getElementById("specTrend").checked = S.specTrend;
-  document.getElementById("specQuad").checked = S.specQuad;
-  document.getElementById("specGroupFE").checked = S.specGroupFE;
-  document.getElementById("groupEstimator").value = S.groupEstimator;
-  updateLabels();
+function drawDist() {
+  var key = outcomeKey(), vals = DATA.map(function (r) { return r[key]; });
+  var w = 480, h = 300, m = { l: 40, r: 12, t: 12, b: 34 };
+  var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals), bins = 30, bw = (mx - mn) / bins || 1, cnt = new Array(bins).fill(0);
+  vals.forEach(function (v) { var i = Math.max(0, Math.min(bins - 1, Math.floor((v - mn) / bw))); cnt[i]++; });
+  var maxC = Math.max.apply(null, cnt), xs = scaleLin(0, bins, m.l, w - m.r), ys = scaleLin(0, maxC, h - m.b, m.t);
+  var svg = svgEl(w, h); gridY(svg, m, w, h, 5);
+  var bwid = (w - m.l - m.r) / bins - 1;
+  for (var i = 0; i < bins; i++) svg.appendChild(rect(xs(i) + 0.5, ys(cnt[i]), bwid, ys(0) - ys(cnt[i]), "#60a5fa"));
+  svg.appendChild(line(m.l, h - m.b, w - m.r, h - m.b, "#374151", 1));
+  [0, 0.5, 1].forEach(function (p) { svg.appendChild(txt(m.l + p * (w - m.l - m.r), h - m.b + 14, fmt(mn + p * (mx - mn), 1), "#9aa0a6", 9)); });
+  svg.appendChild(txt(w / 2, h - 4, outcomeLabel(), "#6b7280", 10));
+  setChart("chart-dist", svg);
+  $("distLabel").textContent = outcomeLabel();
 }
 
-// ============== SVG DRAWING ==============
-function createSVG(w, h) {
-  var svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 " + w + " " + h);
-  svg.setAttribute("width", "100%");
-  svg.setAttribute("height", "100%");
-  return svg;
+function focalGroup(r) { if (S.focal === "educ") return r.educ >= 12 ? 1 : 0; return r[S.focal]; }
+function drawByGroup() {
+  var key = outcomeKey(), yrs = META.years;
+  var w = 480, h = 300, m = { l: 48, r: 12, t: 12, b: 34 };
+  var s0 = [], s1 = [];
+  yrs.forEach(function (yr) {
+    var g0 = [], g1 = [];
+    DATA.forEach(function (r) { if (r.year !== yr) return; (focalGroup(r) === 1 ? g1 : g0).push(r[key]); });
+    s0.push({ yr: yr, v: g0.length ? E.mean(g0) : NaN }); s1.push({ yr: yr, v: g1.length ? E.mean(g1) : NaN });
+  });
+  var all = s0.concat(s1).map(function (p) { return p.v; }).filter(isFinite);
+  var yMin = Math.min.apply(null, all), yMax = Math.max.apply(null, all), pad = (yMax - yMin) * 0.1; yMin -= pad; yMax += pad;
+  var xs = scaleLin(yrs[0], yrs[yrs.length - 1], m.l, w - m.r), ys = scaleLin(yMin, yMax, h - m.b, m.t);
+  var svg = svgEl(w, h); gridY(svg, m, w, h, 6);
+  function draw(ser, col) { var pts = ser.filter(function (p) { return isFinite(p.v); }).map(function (p) { return [xs(p.yr), ys(p.v)]; }); svg.appendChild(polyline(pts, col, 2.4, 0.95)); pts.forEach(function (p) { svg.appendChild(circle(p[0], p[1], 2.6, col, 0.95)); }); }
+  draw(s0, "#e5e7eb"); draw(s1, "#60a5fa");
+  svg.appendChild(line(m.l, h - m.b, w - m.r, h - m.b, "#374151", 1));
+  yrs.forEach(function (yr) { svg.appendChild(txt(xs(yr), h - m.b + 14, String(yr).slice(2), "#9aa0a6", 9)); });
+  [0, 0.5, 1].forEach(function (p) { svg.appendChild(txt(m.l - 6, ys(yMin + p * (yMax - yMin)) + 3, fmt(yMin + p * (yMax - yMin), 1), "#9aa0a6", 9, "end")); });
+  svg.appendChild(txt(w / 2, h - 4, S.focal === "educ" ? "year (focal: educ ≥ 12)" : "year", "#6b7280", 10));
+  setChart("chart-bygroup", svg);
 }
 
-function line(x1, y1, x2, y2, stroke = "#6b7280", sw = 1) {
-  var el = document.createElementNS("http://www.w3.org/2000/svg", "line");
-  el.setAttribute("x1", x1); el.setAttribute("y1", y1);
-  el.setAttribute("x2", x2); el.setAttribute("y2", y2);
-  el.setAttribute("stroke", stroke); el.setAttribute("stroke-width", sw);
-  return el;
+function drawVariance() {
+  var keys = [S.focal, outcomeKey()], labels = [FOCAL_SHORT[S.focal], outcomeLabel()];
+  var w = 480, h = 300, m = { l: 70, r: 80, t: 20, b: 30 };
+  var svg = svgEl(w, h);
+  var barH = 46, gap = 40, x0 = m.l, xW = w - m.l - m.r;
+  keys.forEach(function (k, i) {
+    var d = varianceDecomp(DATA, k), y = m.t + i * (barH + gap);
+    svg.appendChild(rect(x0, y, xW * d.within, barH, "#22c55e"));
+    svg.appendChild(rect(x0 + xW * d.within, y, xW * d.between, barH, "#6b7280"));
+    svg.appendChild(txt(x0 - 8, y + barH / 2 + 4, labels[i], "#e5e7eb", 12, "end"));
+    if (d.within > 0.06) svg.appendChild(txt(x0 + xW * d.within / 2, y + barH / 2 + 4, Math.round(d.within * 100) + "%", "#04210f", 12));
+    if (d.between > 0.06) svg.appendChild(txt(x0 + xW * d.within + xW * d.between / 2, y + barH / 2 + 4, Math.round(d.between * 100) + "%", "#e5e7eb", 12));
+  });
+  svg.appendChild(txt(x0, m.t - 6, "within-person", "#22c55e", 11, "start"));
+  svg.appendChild(txt(w - m.r, m.t - 6, "between-person", "#9aa0a6", 11, "end"));
+  setChart("chart-variance", svg);
+  var dv = varianceDecomp(DATA, S.focal);
+  var note = Math.round(dv.within * 100) + "% of the variation in <strong>" + FOCAL_SHORT[S.focal] + "</strong> is within-person. ";
+  note += dv.within < 0.02
+    ? "Almost none — so Fixed Effects and First Differences <strong>cannot identify</strong> this effect."
+    : "Fixed Effects uses only this within-person part; the " + Math.round(dv.between * 100) + "% between-person variation is discarded.";
+  $("varianceNote").innerHTML = note;
 }
 
-function rect(x, y, w, h, fill = "#60a5fa") {
-  var el = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-  el.setAttribute("x", x); el.setAttribute("y", y);
-  el.setAttribute("width", w); el.setAttribute("height", h);
-  el.setAttribute("fill", fill);
-  return el;
-}
-
-function circle(x, y, r, fill = "#cbd5e1", op = 0.8) {
-  var el = document.createElementNS("http://www.w3.org/2000/svg", "circle");
-  el.setAttribute("cx", x); el.setAttribute("cy", y); el.setAttribute("r", r);
-  el.setAttribute("fill", fill); el.setAttribute("fill-opacity", op);
-  return el;
-}
-
-function polyline(points, stroke = "#93c5fd", sw = 1, op = 1) {
-  var el = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-  el.setAttribute("points", points.map(p => p[0] + "," + p[1]).join(" "));
-  el.setAttribute("fill", "none");
-  el.setAttribute("stroke", stroke);
-  el.setAttribute("stroke-width", sw);
-  el.setAttribute("stroke-opacity", op);
-  return el;
-}
-
-function textSVG(x, y, txt, fill = "#9aa0a6", fs = 10, anchor = "middle") {
-  var el = document.createElementNS("http://www.w3.org/2000/svg", "text");
-  el.setAttribute("x", x); el.setAttribute("y", y);
-  el.setAttribute("fill", fill); el.setAttribute("font-size", fs);
-  el.setAttribute("text-anchor", anchor);
-  el.textContent = txt;
-  return el;
-}
-
-function axis(svg, x, y, len, horizontal, ticks) {
-  if (horizontal) {
-    svg.appendChild(line(x, y, x + len, y, "#374151", 1));
-    for (var i = 0; i < ticks.length; i++) {
-      var t = ticks[i], tx = x + t.pos * len;
-      svg.appendChild(line(tx, y, tx, y + 4, "#4b5563", 1));
-      svg.appendChild(textSVG(tx, y + 14, t.label, "#9aa0a6", 10, "middle"));
-    }
-  } else {
-    svg.appendChild(line(x, y - len, x, y, "#374151", 1));
-    for (var j = 0; j < ticks.length; j++) {
-      var tt = ticks[j], ty = y - tt.pos * len;
-      svg.appendChild(line(x - 4, ty, x, ty, "#4b5563", 1));
-      svg.appendChild(textSVG(x - 6, ty + 3, tt.label, "#9aa0a6", 10, "end"));
-    }
-  }
-}
-
-function scaleLinear(d0, d1, r0, r1) {
-  var d = d1 - d0 || 1e-9;
-  var m = (r1 - r0) / d;
-  return v => r0 + (v - d0) * m;
-}
-
-// ============== CHART DRAWING FUNCTIONS ==============
-function groupColor(gid) {
-  var palette = ["#60a5fa", "#34d399", "#fbbf24", "#a78bfa", "#f472b6"];
-  var idx = Math.max(1, gid || 1) - 1;
-  return palette[idx % palette.length];
-}
-
-function drawScatter(container, data, model, opts = {}) {
-  container.innerHTML = "";
-  var w = 480, h = 300, m = { l: 45, r: 15, t: 15, b: 35 };
-  var yMin = Math.min.apply(null, data.map(d => d.y));
-  var yMax = Math.max.apply(null, data.map(d => d.y));
-  var pad = (yMax - yMin) * 0.1;
-  yMin -= pad; yMax += pad;
-  var xs = scaleLinear(-0.1, 1.1, m.l, w - m.r);
-  var ys = scaleLinear(yMin, yMax, h - m.b, m.t);
-  var svg = createSVG(w, h);
-
-  // Grid
-  for (var i = 0; i <= 10; i++) {
-    var gx = m.l + i * (w - m.l - m.r) / 10;
-    svg.appendChild(line(gx, m.t, gx, h - m.b, "#1a1a1a", 1));
-  }
-  for (i = 0; i <= 8; i++) {
-    var gy = m.t + i * (h - m.t - m.b) / 8;
-    svg.appendChild(line(m.l, gy, w - m.r, gy, "#1a1a1a", 1));
-  }
-
-  // Axes
-  axis(svg, m.l, h - m.b, w - m.l - m.r, true, [
-    { pos: (0 - (-0.1)) / 1.2, label: "D=0" },
-    { pos: (1 - (-0.1)) / 1.2, label: "D=1" }
-  ]);
-  var yTicks = [0, 0.25, 0.5, 0.75, 1].map(p => ({ pos: p, label: fmt(yMin + p * (yMax - yMin), 1) }));
-  axis(svg, m.l, h - m.b, h - m.t - m.b, false, yTicks);
-
-  // Axis labels
-  svg.appendChild(textSVG(w / 2, h - 5, "Treatment (D)", "#6b7280", 11, "middle"));
-
-  // Points with jitter
-  var rng = mulberry32(42);
-  for (i = 0; i < data.length; i++) {
-    var jx = (rng() - 0.5) * 0.15;
-    var col = opts.colorByGroup ? groupColor(data[i].gid) : "#64748b";
-    svg.appendChild(circle(xs(data[i].x + jx), ys(data[i].y), 2.5, col, opts.colorByGroup ? 0.75 : 0.6));
-  }
-
-  // Regression line
-  if (model) {
-    var b0 = coefAt(model, "Intercept").b;
-    if (!isFinite(b0)) b0 = 0;
-    var bD = coefAt(model, "D").b;
-    if (isFinite(bD)) {
-      var p1 = [xs(0), ys(b0)];
-      var p2 = [xs(1), ys(b0 + bD)];
-      svg.appendChild(polyline([p1, p2], "#93c5fd", 2.5, 1));
-    }
-  }
-
-  container.appendChild(svg);
-}
-
-function drawLines(container, spaghetti, summary, T, opts = {}) {
-  container.innerHTML = "";
-  var w = 480, h = 300, m = { l: 45, r: 15, t: 15, b: 35 };
-  var allY = [];
-  for (var s = 0; s < spaghetti.length; s++) {
-    for (var q = 0; q < spaghetti[s].series.length; q++) {
-      allY.push(spaghetti[s].series[q].y);
-    }
-  }
-  for (var r = 0; r < summary.length; r++) {
-    allY.push(summary[r].mean, summary[r].median, summary[r].p25, summary[r].p75);
-  }
-  var yMin = Math.min.apply(null, allY), yMax = Math.max.apply(null, allY);
-  var pad = (yMax - yMin) * 0.1;
-  yMin -= pad; yMax += pad;
-  var xs = scaleLinear(0.5, T + 0.5, m.l, w - m.r);
-  var ys = scaleLinear(yMin, yMax, h - m.b, m.t);
-  var svg = createSVG(w, h);
-
-  // Grid
-  for (var i = 1; i <= T; i++) {
-    var gx = xs(i);
-    svg.appendChild(line(gx, m.t, gx, h - m.b, "#1a1a1a", 1));
-  }
-  for (i = 0; i <= 8; i++) {
-    var gy = m.t + i * (h - m.t - m.b) / 8;
-    svg.appendChild(line(m.l, gy, w - m.r, gy, "#1a1a1a", 1));
-  }
-
-  // Axes
-  var xTicks = [];
-  for (i = 1; i <= T; i++) xTicks.push({ pos: (i - 0.5) / T, label: String(i) });
-  axis(svg, m.l, h - m.b, w - m.l - m.r, true, xTicks);
-  var yTicks = [0, 0.25, 0.5, 0.75, 1].map(p => ({ pos: p, label: fmt(yMin + p * (yMax - yMin), 1) }));
-  axis(svg, m.l, h - m.b, h - m.t - m.b, false, yTicks);
-
-  // Axis labels
-  svg.appendChild(textSVG(w / 2, h - 5, "Wave (t)", "#6b7280", 11, "middle"));
-
-  // Individual trajectories
-  for (s = 0; s < spaghetti.length; s++) {
-    var pts = [];
-    for (q = 0; q < spaghetti[s].series.length; q++) {
-      pts.push([xs(spaghetti[s].series[q].t), ys(spaghetti[s].series[q].y)]);
-    }
-    var col = opts.colorByGroup ? groupColor(spaghetti[s].gid) : "#4b5563";
-    svg.appendChild(polyline(pts, col, 1, 0.35));
-  }
-
-  // Summary lines
-  function pathFor(key, color, width) {
-    var pts = [];
-    for (i = 0; i < summary.length; i++) {
-      pts.push([xs(summary[i].t), ys(summary[i][key])]);
-    }
-    svg.appendChild(polyline(pts, color, width, 1));
-  }
-  pathFor("p25", "#a78bfa", 1.5);
-  pathFor("p75", "#a78bfa", 1.5);
-  pathFor("median", "#e5e7eb", 2);
-  pathFor("mean", "#93c5fd", 2.5);
-
-  container.appendChild(svg);
-}
-
-function drawWaveMeans(container, rows, T) {
-  container.innerHTML = "";
-  var w = 480, h = 300, m = { l: 45, r: 15, t: 15, b: 35 };
-
-  var series0 = [], series1 = [];
-  for (var t = 1; t <= T; t++) {
-    var y0 = [], y1 = [];
-    for (var i = 0; i < rows.length; i++) {
-      if (rows[i].wave !== t) continue;
-      if (rows[i].D === 1) y1.push(rows[i].y);
-      else y0.push(rows[i].y);
-    }
-    series0.push({ t, y: y0.length ? mean(y0) : NaN });
-    series1.push({ t, y: y1.length ? mean(y1) : NaN });
-  }
-
-  var allY = series0.concat(series1).map(p => p.y).filter(v => isFinite(v));
-  if (!allY.length) {
-    container.innerHTML = "<div style='padding:20px;color:#6b7280'>No data</div>";
-    return;
-  }
-
-  var yMin = Math.min.apply(null, allY), yMax = Math.max.apply(null, allY);
-  var pad = (yMax - yMin) * 0.1;
-  yMin -= pad; yMax += pad;
-  var xs = scaleLinear(0.5, T + 0.5, m.l, w - m.r);
-  var ys = scaleLinear(yMin, yMax, h - m.b, m.t);
-  var svg = createSVG(w, h);
-
-  for (var gx = 1; gx <= T; gx++) svg.appendChild(line(xs(gx), m.t, xs(gx), h - m.b, "#1a1a1a", 1));
-  for (var gy = 0; gy <= 8; gy++) {
-    var yy = m.t + gy * (h - m.t - m.b) / 8;
-    svg.appendChild(line(m.l, yy, w - m.r, yy, "#1a1a1a", 1));
-  }
-
-  var xTicks = [];
-  for (var tt = 1; tt <= T; tt++) xTicks.push({ pos: (tt - 0.5) / T, label: String(tt) });
-  axis(svg, m.l, h - m.b, w - m.l - m.r, true, xTicks);
-  var yTicks = [0, 0.25, 0.5, 0.75, 1].map(p => ({ pos: p, label: fmt(yMin + p * (yMax - yMin), 1) }));
-  axis(svg, m.l, h - m.b, h - m.t - m.b, false, yTicks);
-
-  svg.appendChild(textSVG(w / 2, h - 5, "Wave (t)", "#6b7280", 11, "middle"));
-
-  function drawSeries(ser, stroke) {
-    var pts = [];
-    for (var i = 0; i < ser.length; i++) if (isFinite(ser[i].y)) pts.push([xs(ser[i].t), ys(ser[i].y)]);
-    if (pts.length >= 2) svg.appendChild(polyline(pts, stroke, 2.5, 0.95));
-    for (i = 0; i < ser.length; i++) if (isFinite(ser[i].y)) svg.appendChild(circle(xs(ser[i].t), ys(ser[i].y), 2.8, stroke, 0.9));
-  }
-  drawSeries(series0, "#e5e7eb");
-  drawSeries(series1, "#60a5fa");
-
-  container.appendChild(svg);
-}
-
-function drawBetaDist(container, rows, opts = {}) {
-  container.innerHTML = "";
-  var w = 480, h = 300, m = { l: 45, r: 15, t: 15, b: 35 };
-
-  var byPid = {};
-  for (var i = 0; i < rows.length; i++) {
-    var pid = rows[i].pid;
-    if (byPid[pid] == null) byPid[pid] = rows[i].beta_i;
-  }
-  var vals = Object.values(byPid).filter(v => isFinite(v));
-  if (!vals.length) {
-    container.innerHTML = "<div style='padding:20px;color:#6b7280'>No data</div>";
-    return;
-  }
-  var mn = Math.min.apply(null, vals), mx = Math.max.apply(null, vals);
-  if (mn === mx) { mn -= 0.5; mx += 0.5; }
-  var bins = 25;
-  var width = (mx - mn) / bins || 1;
-  var cnt = new Array(bins).fill(0);
-  for (i = 0; i < vals.length; i++) {
-    var v = vals[i];
-    var idx = Math.max(0, Math.min(bins - 1, Math.floor((v - mn) / width)));
-    cnt[idx]++;
-  }
-  var maxCnt = Math.max.apply(null, cnt);
-  var xs = scaleLinear(mn, mx, m.l, w - m.r);
-  var ys = scaleLinear(0, maxCnt, h - m.b, m.t);
-  var svg = createSVG(w, h);
-
-  for (var gy = 0; gy <= 6; gy++) {
-    var yy = m.t + gy * (h - m.t - m.b) / 6;
-    svg.appendChild(line(m.l, yy, w - m.r, yy, "#1a1a1a", 1));
-  }
-
-  var bw = (w - m.l - m.r) / bins - 1;
-  for (i = 0; i < bins; i++) {
-    var x0 = m.l + i * ((w - m.l - m.r) / bins) + 0.5;
-    var barH = ys(0) - ys(cnt[i]);
-    svg.appendChild(rect(x0, ys(cnt[i]), bw, barH, "#a3a3a3"));
-  }
-
-  var meanLine = opts.betaMean;
-  if (isFinite(meanLine)) {
-    var xm = xs(meanLine);
-    svg.appendChild(line(xm, m.t, xm, h - m.b, "#f87171", 2));
-  }
-
-  axis(svg, m.l, h - m.b, w - m.l - m.r, true, [
-    { pos: 0, label: fmt(mn, 2) },
-    { pos: 0.5, label: fmt((mn + mx) / 2, 2) },
-    { pos: 1, label: fmt(mx, 2) }
-  ]);
-  axis(svg, m.l, h - m.b, h - m.t - m.b, false, [
-    { pos: 0, label: "0" },
-    { pos: 1, label: String(maxCnt) }
-  ]);
-
-  svg.appendChild(textSVG(w / 2, h - 5, "True individual effect (βᵢ)", "#6b7280", 11, "middle"));
-  container.appendChild(svg);
-}
-
-function drawBarsWithCI(container, rows, betaTrue) {
-  container.innerHTML = "";
-  var w = 480, h = 300, m = { l: 55, r: 15, t: 20, b: 70 };
-  var allY = [betaTrue, 0];
-  for (var i = 0; i < rows.length; i++) {
-    if (isFinite(rows[i].b)) allY.push(rows[i].b);
-    if (rows[i].se && isFinite(rows[i].se)) {
-      var c = ci(rows[i].b, rows[i].se);
-      allY.push(c[0], c[1]);
-    }
-  }
-  var yMin = Math.min.apply(null, allY), yMax = Math.max.apply(null, allY);
-  var pad = (yMax - yMin) * 0.15;
-  yMin -= pad; yMax += pad;
-
-  var barWidth = (w - m.l - m.r) / rows.length;
-  var xs = i => m.l + i * barWidth + barWidth / 2;
-  var ys = scaleLinear(yMin, yMax, h - m.b, m.t);
-  var svg = createSVG(w, h);
-
-  // Grid
-  for (i = 0; i <= 8; i++) {
-    var gy = m.t + i * (h - m.t - m.b) / 8;
-    svg.appendChild(line(m.l, gy, w - m.r, gy, "#1a1a1a", 1));
-  }
-
-  // Zero line
-  var y0 = ys(0);
-  svg.appendChild(line(m.l, y0, w - m.r, y0, "#374151", 1));
-
-  // True beta line
-  var ytrue = ys(betaTrue);
-  svg.appendChild(line(m.l, ytrue, w - m.r, ytrue, "#f87171", 2));
-  svg.appendChild(textSVG(w - m.r + 5, ytrue + 4, "True β", "#f87171", 10, "start"));
-
-  // Y axis
-  var yTicks = [0, 0.25, 0.5, 0.75, 1].map(p => ({ pos: p, label: fmt(yMin + p * (yMax - yMin), 2) }));
-  axis(svg, m.l, h - m.b, h - m.t - m.b, false, yTicks);
-
-  // Bars and CIs
-  var bw = barWidth * 0.6;
-  for (i = 0; i < rows.length; i++) {
-    var cx = xs(i);
-    var barY = ys(rows[i].b);
-    var barH = Math.abs(barY - y0);
-    var barTop = Math.min(barY, y0);
-
-    // Bar
-    svg.appendChild(rect(cx - bw / 2, barTop, bw, barH, rows[i].color || "#60a5fa"));
-
-    // CI whiskers
-    if (rows[i].se && isFinite(rows[i].se)) {
-      var C = ci(rows[i].b, rows[i].se);
-      var ylo = ys(C[0]), yhi = ys(C[1]);
-      svg.appendChild(line(cx, ylo, cx, yhi, "#e5e7eb", 2));
-      svg.appendChild(line(cx - 8, ylo, cx + 8, ylo, "#e5e7eb", 2));
-      svg.appendChild(line(cx - 8, yhi, cx + 8, yhi, "#e5e7eb", 2));
-    }
-
-    // Label
-    svg.appendChild(textSVG(cx, h - m.b + 15, rows[i].name, "#9aa0a6", 10, "middle"));
-    svg.appendChild(textSVG(cx, h - m.b + 28, "β̂=" + fmt(rows[i].b, 2), "#6b7280", 9, "middle"));
-  }
-
-  container.appendChild(svg);
-}
-
-function drawResiduals(container, points) {
-  container.innerHTML = "";
-  var w = 480, h = 280, m = { l: 45, r: 15, t: 15, b: 35 };
-  if (!points || points.length === 0) {
-    container.innerHTML = "<div style='padding:20px;color:#6b7280'>No data available</div>";
-    return;
-  }
-
-  var fitMin = points[0].fit, fitMax = points[0].fit;
-  var rMin = points[0].resid, rMax = points[0].resid;
-  for (var i = 1; i < points.length; i++) {
-    if (points[i].fit < fitMin) fitMin = points[i].fit;
-    if (points[i].fit > fitMax) fitMax = points[i].fit;
-    if (points[i].resid < rMin) rMin = points[i].resid;
-    if (points[i].resid > rMax) rMax = points[i].resid;
-  }
-  var padX = (fitMax - fitMin) * 0.1;
-  var padY = (rMax - rMin) * 0.1;
-  fitMin -= padX; fitMax += padX;
-  rMin -= padY; rMax += padY;
-
-  var xs = scaleLinear(fitMin, fitMax, m.l, w - m.r);
-  var ys = scaleLinear(rMin, rMax, h - m.b, m.t);
-  var svg = createSVG(w, h);
-
-  // Grid
-  for (i = 0; i <= 8; i++) {
-    var gx = m.l + i * (w - m.l - m.r) / 8;
-    var gy = m.t + i * (h - m.t - m.b) / 8;
-    svg.appendChild(line(gx, m.t, gx, h - m.b, "#1a1a1a", 1));
-    svg.appendChild(line(m.l, gy, w - m.r, gy, "#1a1a1a", 1));
-  }
-
-  // Zero line
-  var y0 = ys(0);
-  svg.appendChild(line(m.l, y0, w - m.r, y0, "#94a3b8", 1.5));
-
-  // Points
-  for (i = 0; i < points.length; i++) {
-    svg.appendChild(circle(xs(points[i].fit), ys(points[i].resid), 2, "#64748b", 0.5));
-  }
-
-  // Axes
-  var xTicks = [0, 0.5, 1].map(p => ({ pos: p, label: fmt(fitMin + p * (fitMax - fitMin), 1) }));
-  var yTicks = [0, 0.5, 1].map(p => ({ pos: p, label: fmt(rMin + p * (rMax - rMin), 1) }));
-  axis(svg, m.l, h - m.b, w - m.l - m.r, true, xTicks);
-  axis(svg, m.l, h - m.b, h - m.t - m.b, false, yTicks);
-
-  svg.appendChild(textSVG(w / 2, h - 5, "Fitted values", "#6b7280", 10, "middle"));
-
-  container.appendChild(svg);
-}
-
-function drawHist(container, resid) {
-  container.innerHTML = "";
-  var w = 480, h = 280, m = { l: 45, r: 15, t: 15, b: 35 };
-  if (resid.length === 0) {
-    container.innerHTML = "<div style='padding:20px;color:#6b7280'>No data</div>";
-    return;
-  }
-
-  var mn = Math.min.apply(null, resid), mx = Math.max.apply(null, resid);
-  var bins = 25;
-  var width = (mx - mn) / bins || 1;
-  var cnt = new Array(bins).fill(0);
-  for (var i = 0; i < resid.length; i++) {
-    var v = resid[i];
-    var idx = Math.max(0, Math.min(bins - 1, Math.floor((v - mn) / width)));
-    cnt[idx]++;
-  }
-
-  var xs = scaleLinear(0, bins, m.l, w - m.r);
-  var maxCnt = Math.max.apply(null, cnt);
-  var ys = scaleLinear(0, maxCnt, h - m.b, m.t);
-  var svg = createSVG(w, h);
-
-  // Grid
-  for (i = 0; i <= 5; i++) {
-    var gy = m.t + i * (h - m.t - m.b) / 5;
-    svg.appendChild(line(m.l, gy, w - m.r, gy, "#1a1a1a", 1));
-  }
-
-  // Bars
-  var bw = (w - m.l - m.r) / bins - 1;
-  for (i = 0; i < bins; i++) {
-    var x = xs(i) + 0.5;
-    var barH = ys(0) - ys(cnt[i]);
-    svg.appendChild(rect(x, ys(cnt[i]), bw, barH, "#60a5fa"));
-  }
-
-  // Axes
-  axis(svg, m.l, h - m.b, w - m.l - m.r, true, [
-    { pos: 0, label: fmt(mn, 1) },
-    { pos: 0.5, label: fmt((mn + mx) / 2, 1) },
-    { pos: 1, label: fmt(mx, 1) }
-  ]);
-  axis(svg, m.l, h - m.b, h - m.t - m.b, false, [
-    { pos: 0, label: "0" },
-    { pos: 1, label: String(maxCnt) }
-  ]);
-
-  svg.appendChild(textSVG(w / 2, h - 5, "Residual value", "#6b7280", 10, "middle"));
-
-  container.appendChild(svg);
-}
-
-function drawQQ(container, resid) {
-  container.innerHTML = "";
-  var w = 480, h = 280, m = { l: 45, r: 15, t: 15, b: 35 };
-  var r = resid.slice().sort((a, b) => a - b);
-  if (r.length < 5) {
-    container.innerHTML = "<div style='padding:20px;color:#6b7280'>Not enough data</div>";
-    return;
-  }
-
-  function erfinv(x) {
-    var a = 0.147;
-    var ln = Math.log(1 - x * x);
-    var s = 2 / (Math.PI * a) + ln / 2;
-    return Math.sign(x) * Math.sqrt(Math.sqrt(s * s - ln / a) - s);
-  }
-
-  var n = r.length, pts = [];
-  for (var i = 0; i < n; i++) {
-    var p = (i + 0.5) / n;
-    var z = Math.SQRT2 * erfinv(2 * p - 1);
-    pts.push({ theor: z, sample: r[i] });
-  }
-
-  var xs = scaleLinear(pts[0].theor, pts[pts.length - 1].theor, m.l, w - m.r);
-  var ys = scaleLinear(r[0], r[r.length - 1], h - m.b, m.t);
-  var svg = createSVG(w, h);
-
-  // Grid
-  for (i = 0; i <= 8; i++) {
-    var gx = m.l + i * (w - m.l - m.r) / 8;
-    var gy = m.t + i * (h - m.t - m.b) / 8;
-    svg.appendChild(line(gx, m.t, gx, h - m.b, "#1a1a1a", 1));
-    svg.appendChild(line(m.l, gy, w - m.r, gy, "#1a1a1a", 1));
-  }
-
-  // Reference line
-  svg.appendChild(polyline([
-    [xs(pts[0].theor), ys(r[0])],
-    [xs(pts[pts.length - 1].theor), ys(r[r.length - 1])]
-  ], "#94a3b8", 1.5));
-
-  // Points
-  for (i = 0; i < pts.length; i++) {
-    svg.appendChild(circle(xs(pts[i].theor), ys(pts[i].sample), 2, "#64748b", 0.5));
-  }
-
-  // Axes
-  axis(svg, m.l, h - m.b, w - m.l - m.r, true, [
-    { pos: 0, label: fmt(pts[0].theor, 1) },
-    { pos: 1, label: fmt(pts[pts.length - 1].theor, 1) }
-  ]);
-  axis(svg, m.l, h - m.b, h - m.t - m.b, false, [
-    { pos: 0, label: fmt(r[0], 1) },
-    { pos: 1, label: fmt(r[r.length - 1], 1) }
-  ]);
-
-  svg.appendChild(textSVG(w / 2, h - 5, "Theoretical quantiles", "#6b7280", 10, "middle"));
-
-  container.appendChild(svg);
-}
-
-function drawHorizontalCIPlot(container, items, opts = {}) {
-  container.innerHTML = "";
-  if (!items || !items.length) {
-    container.innerHTML = "<div style='padding:20px;color:#6b7280'>No data</div>";
-    return;
-  }
-
-  var w = 480, h = 300, m = { l: 110, r: 15, t: 15, b: 25 };
-  var xsMin = Infinity, xsMax = -Infinity;
-  for (var i = 0; i < items.length; i++) {
-    var it = items[i];
-    if (!isFinite(it.b) || !isFinite(it.se)) continue;
-    var C = ci(it.b, it.se);
-    xsMin = Math.min(xsMin, C[0]);
-    xsMax = Math.max(xsMax, C[1]);
-  }
-  if (!isFinite(xsMin) || !isFinite(xsMax)) {
-    container.innerHTML = "<div style='padding:20px;color:#6b7280'>Not enough data</div>";
-    return;
-  }
-  if (xsMin === xsMax) { xsMin -= 0.5; xsMax += 0.5; }
-  var pad = (xsMax - xsMin) * 0.1;
-  xsMin -= pad; xsMax += pad;
-
-  var xs = scaleLinear(xsMin, xsMax, m.l, w - m.r);
-  var yPos = idx => m.t + idx * ((h - m.t - m.b) / Math.max(1, items.length - 1));
-  var svg = createSVG(w, h);
-
-  // Grid
-  for (var gx = 0; gx <= 8; gx++) {
-    var xx = m.l + gx * (w - m.l - m.r) / 8;
-    svg.appendChild(line(xx, m.t, xx, h - m.b, "#1a1a1a", 1));
-  }
-
-  // Reference lines
-  if (opts.vline != null && isFinite(opts.vline)) {
-    var xv = xs(opts.vline);
-    svg.appendChild(line(xv, m.t, xv, h - m.b, "#f87171", 2));
-  }
-  if (opts.zeroLine) {
-    var x0 = xs(0);
-    svg.appendChild(line(x0, m.t, x0, h - m.b, "#374151", 1.5));
-  }
-
-  // X axis
-  axis(svg, m.l, h - m.b, w - m.l - m.r, true, [
-    { pos: 0, label: fmt(xsMin, 2) },
-    { pos: 0.5, label: fmt((xsMin + xsMax) / 2, 2) },
-    { pos: 1, label: fmt(xsMax, 2) }
-  ]);
-
-  for (i = 0; i < items.length; i++) {
-    var it2 = items[i];
-    var y = yPos(i);
-    svg.appendChild(textSVG(m.l - 8, y + 4, it2.label, "#9aa0a6", 11, "end"));
-    if (!isFinite(it2.b) || !isFinite(it2.se)) continue;
-    var C2 = ci(it2.b, it2.se);
-    svg.appendChild(line(xs(C2[0]), y, xs(C2[1]), y, "#e5e7eb", 2));
-    svg.appendChild(circle(xs(it2.b), y, 4, it2.color || "#60a5fa", 0.95));
-    if (it2.trueVal != null && isFinite(it2.trueVal)) {
-      var xt = xs(it2.trueVal);
-      svg.appendChild(line(xt, y - 6, xt, y + 6, "#f87171", 2));
-    }
-  }
-
-  if (opts.xLabel) svg.appendChild(textSVG((m.l + (w - m.r)) / 2, h - 4, opts.xLabel, "#6b7280", 11, "middle"));
-  container.appendChild(svg);
-}
-
-function drawSeSensitivity(container, which, cross, pooled, models) {
-  var labels = {
-    classical: { label: "Classical", color: "#60a5fa" },
-    robust: { label: "Robust (HC1)", color: "#a78bfa" },
-    cluster: { label: "Cluster (CR1)", color: "#34d399" }
+// ============== MULTIVERSE ==============
+function buildAxes() {
+  return {
+    estimators: S.axes.estimators.slice(),
+    controlsVary: S.axes.controlsVary.slice(),
+    controlsFixed: { experience: false, hours: false, industry: false, region: false, health: false, race: false },
+    yearFEVary: S.axes.yearFEVary, yearFEFixed: false,
+    sampleVary: S.axes.sampleVary.slice(),
+    focal: S.focal, outcome: S.outcome, seType: S.seType
   };
-
-  function estimateModel(kind, seType) {
-    if (kind === "cs") {
-      var dsgn = buildDesign(cross, { includeIntercept: true, includeTrend: false, includeQuad: false, includeGroupFE: S.specGroupFE });
-      return ols(dsgn.X, dsgn.y, { seType, clusterIds: dsgn.ids, coefNames: dsgn.coefNames });
-    }
-    if (kind === "pooled") {
-      var dsgn2 = buildDesign(pooled, { includeIntercept: true, includeTrend: S.specTrend, includeQuad: S.specQuad, includeGroupFE: S.specGroupFE });
-      return ols(dsgn2.X, dsgn2.y, { seType, clusterIds: dsgn2.ids, coefNames: dsgn2.coefNames });
-    }
-    if (kind === "fe") {
-      var dsgn3 = buildDesign(pooled, { includeIntercept: false, includeTrend: S.specTrend, includeQuad: S.specQuad, includeGroupFE: false });
-      return feWithin(dsgn3.ids, dsgn3.X, dsgn3.y, { seType, coefNames: dsgn3.coefNames });
-    }
-    if (kind === "re") {
-      var dsgn4 = buildDesign(pooled, { includeIntercept: true, includeTrend: S.specTrend, includeQuad: S.specQuad, includeGroupFE: S.specGroupFE });
-      return randomEffects(dsgn4.ids, dsgn4.X, dsgn4.y, { seType, coefNames: dsgn4.coefNames });
-    }
-    return null;
-  }
-
-  var base = models && models[which === "pooled" ? "pooledOLS" : which];
-  var b0 = coefAt(base, "D").b;
-  var items = [];
-  ["classical", "robust", "cluster"].forEach(seType => {
-    var fit = estimateModel(which, seType);
-    var d = coefAt(fit, "D");
-    items.push({ label: labels[seType].label, b: d.b, se: d.se, color: labels[seType].color, trueVal: b0 });
-  });
-
-  drawHorizontalCIPlot(container, items, { xLabel: "β̂ (for D)", zeroLine: true, vline: S.betaTrue });
+}
+function comboCount() {
+  var a = S.axes;
+  return a.estimators.length * (1 << a.controlsVary.length) * (a.yearFEVary ? 2 : 1) * Math.max(1, a.sampleVary.length);
+}
+function runMultiverse() {
+  $("comboCount").innerHTML = "Computing " + comboCount() + " specifications…";
+  setTimeout(function () {
+    var t0 = performance.now();
+    S.multiResults = E.enumerateMultiverse(DATA, buildAxes(), META);
+    S.multiSummary = E.summarize(S.multiResults);
+    var ms = Math.round(performance.now() - t0);
+    $("comboCount").innerHTML = comboCount() + " specifications · " + ms + " ms · " + S.multiSummary.unidentified + " not identifiable";
+    renderMulti();
+  }, 20);
 }
 
-function drawGroupSplit(container, pooled, opts = {}) {
-  if (S.nGroups <= 1) {
-    container.innerHTML = "<div style='padding:20px;color:#6b7280'>Set Groups (G) &gt; 1 to split regressions.</div>";
-    return;
-  }
+function drawSpecCurve() {
+  var res = S.multiResults;
+  if (!res) { emptyChart("chart-speccurve", "Click “Build the multiverse”"); return; }
+  var ok = res.filter(function (r) { return r.identified && isFinite(r.b); }).slice().sort(function (a, b) { return a.b - b.b; });
+  if (!ok.length) { emptyChart("chart-speccurve", "No identifiable specifications for this focal effect under these choices."); return; }
+  var w = 920, h = 430, m = { l: 70, r: 16, t: 14, b: 8 };
+  var rowsDef = [];
+  S.axes.estimators.forEach(function (e) { rowsDef.push({ kind: "est", key: e, label: ESTIMATOR_LABEL[e] }); });
+  S.axes.controlsVary.forEach(function (c) { rowsDef.push({ kind: "ctrl", key: c, label: CONTROL_LABEL[c] }); });
+  if (S.axes.yearFEVary) rowsDef.push({ kind: "yfe", key: "yearFE", label: "year FE" });
+  if (S.axes.sampleVary.length > 1) S.axes.sampleVary.forEach(function (s) { rowsDef.push({ kind: "samp", key: s, label: SAMPLE_LABEL[s] }); });
+  var matrixH = rowsDef.length * 13 + 8, curveH = h - m.t - matrixH - 26;
+  var n = ok.length, xAt = function (i) { return m.l + (n === 1 ? 0.5 : i / (n - 1)) * (w - m.l - m.r); };
+  var lo = [], hi = [];
+  ok.forEach(function (r) { var c = ciOf(r.b, r.se); lo.push(isFinite(c[0]) ? c[0] : r.b); hi.push(isFinite(c[1]) ? c[1] : r.b); });
+  var yMin = Math.min(0, Math.min.apply(null, lo)), yMax = Math.max(0, Math.max.apply(null, hi));
+  var pad = (yMax - yMin) * 0.08; yMin -= pad; yMax += pad;
+  var ys = scaleLin(yMin, yMax, m.t + curveH, m.t);
+  var svg = svgEl(w, h);
+  for (var g = 0; g <= 4; g++) { var yy = m.t + g * curveH / 4; svg.appendChild(line(m.l, yy, w - m.r, yy, "#161616", 1)); svg.appendChild(txt(m.l - 6, yy + 3, fmt(yMax - g * (yMax - yMin) / 4, 2), "#9aa0a6", 9, "end")); }
+  svg.appendChild(line(m.l, ys(0), w - m.r, ys(0), "#374151", 1.2));
+  var med = S.multiSummary.median;
+  svg.appendChild(line(m.l, ys(med), w - m.r, ys(med), "#f87171", 1.4));
+  svg.appendChild(txt(w - m.r, ys(med) - 4, "median " + fmt(med, 3), "#f87171", 10, "end"));
+  ok.forEach(function (r, i) {
+    var x = xAt(i), c = ciOf(r.b, r.se), sig = isSig(r.b, r.se);
+    if (isFinite(c[0])) svg.appendChild(line(x, ys(c[0]), x, ys(c[1]), sig ? "#22c55e" : "#6b7280", 0.8));
+    svg.appendChild(circle(x, ys(r.b), 2.2, sig ? "#34d399" : "#9aa0a6", 0.95));
+  });
+  svg.appendChild(txt(m.l, m.t + curveH + 16, "← specifications sorted by estimate →", "#6b7280", 10, "start"));
+  var my0 = m.t + curveH + 26;
+  rowsDef.forEach(function (rd, ri) {
+    var ry = my0 + ri * 13 + 6;
+    svg.appendChild(txt(m.l - 6, ry + 3, rd.label, "#9aa0a6", 9, "end"));
+    svg.appendChild(line(m.l, ry, w - m.r, ry, "#141414", 1));
+    ok.forEach(function (r, i) {
+      var active = rd.kind === "est" ? r.spec.estimator === rd.key
+        : rd.kind === "ctrl" ? !!r.spec.controls[rd.key]
+        : rd.kind === "yfe" ? !!r.spec.yearFE
+        : r.spec.sample === rd.key;
+      if (active) svg.appendChild(circle(xAt(i), ry, 1.7, isSig(r.b, r.se) ? "#34d399" : "#6b7280", 0.9));
+    });
+  });
+  setChart("chart-speccurve", svg);
+}
 
-  function groupBetaShift(gi) {
-    if (S.nGroups <= 1) return 0;
-    var center = (S.nGroups + 1) / 2;
-    var denom = (S.nGroups - 1) / 2;
-    return denom > 0 ? S.groupDeltaBeta * ((gi - center) / denom) : 0;
+function renderMulti() {
+  if (!S.multiResults) $("comboCount").innerHTML = "Will compute " + comboCount() + " specifications when you build it.";
+  var sum = S.multiSummary, cards = $("multiCards"); cards.innerHTML = "";
+  function card(title, val, foot, hi) { var d = document.createElement("div"); d.className = "card" + (hi ? " highlight" : ""); d.innerHTML = "<div class='title'>" + title + "</div><div class='value'>" + val + "</div><div class='foot'>" + (foot || "") + "</div>"; cards.appendChild(d); }
+  if (sum) {
+    card("Median estimate", fmt(sum.median, 3), FOCAL_LABEL[S.focal] + " (" + outcomeLabel() + ")", true);
+    card("Range", fmt(sum.min, 3) + " … " + fmt(sum.max, 3), "min to max across the universe");
+    card("Interquartile", fmt(sum.q25, 3) + " … " + fmt(sum.q75, 3), "middle 50% of specs");
+    card("Significant", Math.round(sum.shareSig * 100) + "%", "of " + sum.identified + " identifiable specs");
+    card("Sign flips", Math.round(sum.shareFlip * 100) + "%", "opposite sign to median");
+    card("Not identifiable", sum.unidentified, "FE/FD on a fixed regressor");
   }
-
-  var items = [];
-  for (var g = 1; g <= S.nGroups; g++) {
-    var subset = pooled.filter(r => r.gid === g);
-    var seType = opts.seType || "classical";
-    var estimator = opts.estimator || "pooled";
-    var fit;
-    if (estimator === "fe") {
-      var d1 = buildDesign(subset, { includeIntercept: false, includeTrend: !!opts.includeTrend, includeQuad: !!opts.includeQuad, includeGroupFE: false });
-      fit = feWithin(d1.ids, d1.X, d1.y, { seType, coefNames: d1.coefNames });
-    } else if (estimator === "re") {
-      var d2 = buildDesign(subset, { includeIntercept: true, includeTrend: !!opts.includeTrend, includeQuad: !!opts.includeQuad, includeGroupFE: false });
-      fit = randomEffects(d2.ids, d2.X, d2.y, { seType, coefNames: d2.coefNames });
+  drawSpecCurve();
+  var box = $("multiInterpretation");
+  if (sum) {
+    var spread = sum.max - sum.min;
+    var verdict = (sum.shareFlip > 0.02 || spread > Math.abs(sum.median))
+      ? "<span class='badge badge-danger'>fragile</span> The estimate swings widely — the headline number depends heavily on analytic choices."
+      : (sum.shareSig > 0.9 ? "<span class='badge badge-success'>robust</span> The effect keeps the same sign and is mostly significant across the universe."
+        : "<span class='badge badge-warning'>mixed</span> The sign is stable but significance is sensitive to choices.");
+    var driver = "";
+    if (S.focal !== "educ") {
+      var byEst = {};
+      S.multiResults.forEach(function (r) { if (r.identified && isFinite(r.b)) (byEst[r.estimator] || (byEst[r.estimator] = [])).push(r.b); });
+      var pooledM = byEst.pooled ? E.mean(byEst.pooled) : NaN, feM = byEst.within ? E.mean(byEst.within) : NaN;
+      if (isFinite(pooledM) && isFinite(feM)) driver = " Within the universe, Pooled OLS averages " + fmt(pooledM, 3) + " but Fixed Effects averages " + fmt(feM, 3) + " — the gap is the part that was selection on stable traits.";
     } else {
-      var d3 = buildDesign(subset, { includeIntercept: true, includeTrend: !!opts.includeTrend, includeQuad: !!opts.includeQuad, includeGroupFE: false });
-      fit = ols(d3.X, d3.y, { seType, clusterIds: d3.ids, coefNames: d3.coefNames });
+      driver = " Every Fixed-Effects and First-Difference specification is dropped: schooling does not change within a person here, so those designs are silent about it.";
     }
-    var d = coefAt(fit, "D");
-    items.push({ label: "G" + g, b: d.b, se: d.se, color: groupColor(g), trueVal: S.betaTrue + groupBetaShift(g) });
-  }
-
-  drawHorizontalCIPlot(container, items, { xLabel: "β̂ (for D)", zeroLine: true, vline: S.betaTrue });
+    box.innerHTML = "<h4>The universe of the " + FOCAL_LABEL[S.focal] + "</h4><p>" + verdict + driver + "</p>";
+  } else box.innerHTML = "<h4>Build the multiverse</h4><p>Choose which forks to open on the left, then click the button. Each combination is a complete, defensible analysis.</p>";
 }
 
-// ============== MODEL DETAILS ==============
-function fillModelDetails(which, cs, pooled, fe, re) {
-  var content = "";
-  var model, name, description, assumptions;
+// ============== SINGLE SPEC ==============
+function ssSpec(estimator) {
+  return { focal: S.focal, outcome: S.outcome, controls: Object.assign({}, S.ss.controls), yearFE: S.ss.yearFE, sample: S.ss.sample, estimator: estimator, seType: S.seType };
+}
+function drawEstBars(items) {
+  var w = 480, h = 300, m = { l: 50, r: 14, t: 16, b: 52 };
+  var vals = [0];
+  items.forEach(function (it) { if (it.identified && isFinite(it.b)) { vals.push(it.b); var c = ciOf(it.b, it.se); vals.push(c[0], c[1]); } });
+  var yMin = Math.min.apply(null, vals), yMax = Math.max.apply(null, vals), pad = (yMax - yMin) * 0.15 || 0.1; yMin -= pad; yMax += pad;
+  var bw = (w - m.l - m.r) / items.length, ys = scaleLin(yMin, yMax, h - m.b, m.t);
+  var svg = svgEl(w, h); gridY(svg, m, w, h, 6);
+  svg.appendChild(line(m.l, ys(0), w - m.r, ys(0), "#374151", 1.2));
+  [0, 0.5, 1].forEach(function (p) { svg.appendChild(txt(m.l - 6, ys(yMin + p * (yMax - yMin)) + 3, fmt(yMin + p * (yMax - yMin), 2), "#9aa0a6", 9, "end")); });
+  items.forEach(function (it, i) {
+    var cx = m.l + i * bw + bw / 2;
+    if (!it.identified || !isFinite(it.b)) {
+      svg.appendChild(rect(cx - bw * 0.25, ys(0) - 1, bw * 0.5, 2, "#3a3a3a"));
+      svg.appendChild(txt(cx, ys(0) - 8, "n.i.", "#6b7280", 10));
+    } else {
+      var y0 = ys(0), bar = ys(it.b), col = it.estimator === "within" ? "#a78bfa" : "#60a5fa";
+      svg.appendChild(rect(cx - bw * 0.28, Math.min(bar, y0), bw * 0.56, Math.abs(bar - y0), col));
+      var c = ciOf(it.b, it.se), ylo = ys(c[0]), yhi = ys(c[1]);
+      svg.appendChild(line(cx, ylo, cx, yhi, "#e5e7eb", 1.6));
+      svg.appendChild(line(cx - 6, ylo, cx + 6, ylo, "#e5e7eb", 1.6));
+      svg.appendChild(line(cx - 6, yhi, cx + 6, yhi, "#e5e7eb", 1.6));
+      svg.appendChild(txt(cx, Math.min(bar, y0) - 5, fmt(it.b, 3), "#cbd5e1", 9));
+    }
+    svg.appendChild(txt(cx, h - m.b + 14, ESTIMATOR_LABEL[it.estimator].split(" ")[0], "#9aa0a6", 9));
+    svg.appendChild(txt(cx, h - m.b + 26, ESTIMATOR_LABEL[it.estimator].split(" ").slice(1).join(" "), "#6b7280", 8));
+  });
+  setChart("chart-estbars", svg);
+}
 
-  if (which === "cs") {
-    model = cs; name = "Cross-Section OLS (Selected Wave)";
-    description = "Uses one wave of data, treating it as a simple cross-section.";
-    assumptions = "Assumes no omitted variable bias: E[uᵢ|Dᵢ] = 0";
-  } else if (which === "pooled") {
-    model = pooled; name = "Pooled OLS (All Waves Stacked)";
-    description = "Stacks all waves and ignores the panel structure. More data, but ignores within-person correlation.";
-    assumptions = "Assumes strict exogeneity: E[uᵢ + εᵢₜ|Dᵢₜ] = 0 for all t";
-  } else if (which === "fe") {
-    model = fe; name = "Fixed Effects (Within Estimator)";
-    description = "Demeans each variable by individual, eliminating all time-invariant factors including uᵢ.";
-    assumptions = "Assumes strict exogeneity of time-varying shocks: E[εᵢₜ|Dᵢₛ, uᵢ] = 0 for all s,t";
-  } else if (which === "re") {
-    model = re; name = "Random Effects (GLS)";
-    description = "Quasi-demeans with θ to account for serial correlation while retaining between-variation.";
-    assumptions = "Assumes RE exogeneity: E[uᵢ|Dᵢₜ] = 0 (stronger than FE)";
+function regressionTable(model, focal) {
+  if (!model || !model.ok) return "<p class='muted'>This estimator does not identify a model for the current choices.</p>";
+  var rows = model.coefNames.map(function (nm, i) {
+    var b = model.beta[i], se = model.se[i], t = model.tstat[i], p = model.pval[i];
+    var star = p < 0.001 ? "***" : p < 0.01 ? "**" : p < 0.05 ? "*" : p < 0.1 ? "." : "";
+    var hl = nm === focal ? " style='background:#0c1929'" : "";
+    return "<tr" + hl + "><td>" + nm + (nm === focal ? " ◀ focal" : "") + "</td><td class='num'>" + fmt(b, 4) + "</td><td class='num'>" + fmt(se, 4) + "</td><td class='num'>" + fmt(t, 2) + "</td><td class='num'>" + (p < 0.0001 ? "&lt;0.0001" : fmt(p, 4)) + " " + star + "</td></tr>";
+  }).join("");
+  var foot = "n = " + model.n + (model.nGroups ? " · persons = " + model.nGroups : "") + " · R² = " + fmt(model.r2, 3) + " · SE: " + model.seType + (model.theta != null ? " · θ = " + fmt(model.theta, 3) : "");
+  return "<table class='stat-table'><thead><tr><th>Coefficient</th><th class='num'>Estimate</th><th class='num'>Std. Err.</th><th class='num'>t</th><th class='num'>p</th></tr></thead><tbody>" + rows + "</tbody></table><p class='help-text mt-2'>" + foot + "</p>";
+}
+
+var DIAG_W = 470, DIAG_H = 350, DIAG_M = { l: 58, r: 16, t: 16, b: 46 };
+function diagSvg() { var s = svgEl(DIAG_W, DIAG_H); s.setAttribute("role", "img"); return s; }
+
+function drawResiduals(model) {
+  if (!model || !model.resid || !model.resid.length) { emptyChart("chart-rvf", "Not identified for this specification."); ariaChart("chart-rvf", "Residuals-versus-fitted plot, not available."); return; }
+  var pts = model.fitted.map(function (f, i) { return { fit: f, r: model.resid[i] }; });
+  var w = DIAG_W, h = DIAG_H, m = DIAG_M;
+  var fmn = Math.min.apply(null, pts.map(function (p) { return p.fit; })), fmx = Math.max.apply(null, pts.map(function (p) { return p.fit; }));
+  var rmx = Math.max.apply(null, pts.map(function (p) { return Math.abs(p.r); }));
+  var xt = niceTicks(fmn, fmx, 5), yt = niceTicks(-rmx, rmx, 5);
+  var xs = scaleLin(xt.lo, xt.hi, m.l, w - m.r), ys = scaleLin(yt.lo, yt.hi, h - m.b, m.t);
+  var svg = diagSvg();
+  plotFrame(svg, m, w, h, xs, ys, xt, yt, "Fitted value of the outcome", "Residual");
+  var z = line(m.l, ys(0), w - m.r, ys(0), "#f87171", 1.4); z.setAttribute("stroke-dasharray", "5,4"); svg.appendChild(z);
+  svg.appendChild(txt(w - m.r - 2, ys(0) - 5, "residual = 0", "#f87171", 10, "end"));
+  pts.forEach(function (p) { svg.appendChild(circle(xs(p.fit), ys(p.r), 2.2, "#60a5fa", 0.4)); });
+  setChart("chart-rvf", svg);
+  ariaChart("chart-rvf", "Scatter plot of residuals against fitted values for " + ESTIMATOR_LABEL[S.ss.estimator] + "; a dashed line marks zero. Look for a flat, patternless band.");
+}
+
+function normalPdf(x, mu, sd) { return Math.exp(-(x - mu) * (x - mu) / (2 * sd * sd)) / (sd * Math.sqrt(2 * Math.PI)); }
+function drawHist(model) {
+  if (!model || !model.resid || !model.resid.length) { emptyChart("chart-hist", "Not identified for this specification."); ariaChart("chart-hist", "Residual histogram, not available."); return; }
+  var r = model.resid, w = DIAG_W, h = DIAG_H, m = DIAG_M;
+  var mn = Math.min.apply(null, r), mx = Math.max.apply(null, r), bins = 24, bw = (mx - mn) / bins || 1, cnt = new Array(bins).fill(0);
+  r.forEach(function (v) { cnt[Math.max(0, Math.min(bins - 1, Math.floor((v - mn) / bw)))]++; });
+  var mu = E.mean(r), sd = Math.sqrt(E.variance(r));
+  var densAsCount = function (x) { return normalPdf(x, mu, sd) * r.length * bw; }; // scale density to count axis
+  var peak = densAsCount(mu);
+  var maxC = Math.max(Math.max.apply(null, cnt), peak);
+  var xt = niceTicks(mn, mx, 5), yt = niceTicks(0, maxC, 5);
+  var xs = scaleLin(xt.lo, xt.hi, m.l, w - m.r), ys = scaleLin(yt.lo, yt.hi, h - m.b, m.t);
+  var svg = diagSvg();
+  plotFrame(svg, m, w, h, xs, ys, xt, yt, "Residual", "Count");
+  for (var i = 0; i < bins; i++) { var x0 = xs(mn + i * bw), x1 = xs(mn + (i + 1) * bw); svg.appendChild(rect(x0 + 0.5, ys(cnt[i]), Math.max(1, x1 - x0 - 1), ys(0) - ys(cnt[i]), "#3b82f6")); }
+  var dpts = []; for (var s = 0; s <= 60; s++) { var xv = mn + (mx - mn) * s / 60; dpts.push([xs(xv), ys(densAsCount(xv))]); }
+  svg.appendChild(polyline(dpts, "#f59e0b", 2, 0.95));
+  svg.appendChild(txt(w - m.r - 2, m.t + 10, "normal fit", "#f59e0b", 10, "end"));
+  setChart("chart-hist", svg);
+  ariaChart("chart-hist", "Histogram of residuals for " + ESTIMATOR_LABEL[S.ss.estimator] + " with a fitted normal density overlaid. Look for an approximately symmetric, bell-shaped distribution.");
+}
+
+function drawQQ(model) {
+  if (!model || !model.resid || model.resid.length < 5) { emptyChart("chart-qq", "Not identified for this specification."); ariaChart("chart-qq", "Normal quantile-quantile plot, not available."); return; }
+  var r = model.resid.slice().sort(function (a, b) { return a - b; });
+  function erfinv(x) { var a = 0.147, ln = Math.log(1 - x * x), s = 2 / (Math.PI * a) + ln / 2; return Math.sign(x) * Math.sqrt(Math.sqrt(s * s - ln / a) - s); }
+  var n = r.length, w = DIAG_W, h = DIAG_H, m = DIAG_M, pts = [];
+  for (var i = 0; i < n; i++) { var p = (i + 0.5) / n; pts.push({ t: Math.SQRT2 * erfinv(2 * p - 1), s: r[i] }); }
+  var tmin = pts[0].t, tmax = pts[n - 1].t;
+  var xt = niceTicks(tmin, tmax, 5), yt = niceTicks(r[0], r[n - 1], 5);
+  var xs = scaleLin(xt.lo, xt.hi, m.l, w - m.r), ys = scaleLin(yt.lo, yt.hi, h - m.b, m.t);
+  var svg = diagSvg();
+  plotFrame(svg, m, w, h, xs, ys, xt, yt, "Theoretical quantile (standard normal)", "Sample quantile (residual)");
+  // reference line through the data's robust slope: mean ± sd
+  var mu = E.mean(r), sd = Math.sqrt(E.variance(r));
+  var rx0 = xt.lo, rx1 = xt.hi;
+  svg.appendChild(polyline([[xs(rx0), ys(mu + sd * rx0)], [xs(rx1), ys(mu + sd * rx1)]], "#f87171", 1.6));
+  svg.appendChild(txt(w - m.r - 2, m.t + 10, "normal reference", "#f87171", 10, "end"));
+  pts.forEach(function (p) { svg.appendChild(circle(xs(p.t), ys(p.s), 2.2, "#60a5fa", 0.45)); });
+  setChart("chart-qq", svg);
+  ariaChart("chart-qq", "Normal quantile-quantile plot of residuals for " + ESTIMATOR_LABEL[S.ss.estimator] + " with a reference line. Points on the line indicate normality.");
+}
+
+// ============== LIVE EQUATION ("under the hood") ==============
+var SUB_IT = "<sub>it</sub>", SUB_I = "<sub>i</sub>", SUB_T = "<sub>t</sub>";
+function vsym(nm, focal) {
+  if (nm === focal) return "<span class='eq-focal'>" + FOCAL_SHORT[focal] + "</span>";
+  if (nm === "expersq") return "exper²";
+  if (nm === "(Intercept)") return "1";
+  if (nm.indexOf("mean(") === 0) return "<span class='eq-note'>" + nm.replace("mean(" + focal + ")", "mean(" + FOCAL_SHORT[focal] + ")") + "</span>";
+  return nm.replace(/^ind:/, "ind=").replace(/^reg:/, "reg=").replace(/^yr:/, "year=");
+}
+function fittedEquation(model, focal, est) {
+  if (!model || !model.ok) return "<span class='eq-note'>not identified</span>";
+  var lhs = est === "fd" ? "Δ " + yName() + SUB_IT : (est === "within" || est === "twfe") ? "(" + yName() + SUB_IT + " − " + yName() + "̄" + SUB_I + (est === "twfe" ? " − …" : "") + ")" : yName() + "̂" + SUB_IT;
+  var shownKeys = { "(Intercept)": 1, "(drift)": 1 }; shownKeys[focal] = 1; shownKeys["exper"] = 1; shownKeys["expersq"] = 1; shownKeys["mean(" + focal + ")"] = 1;
+  var parts = [], hidden = 0, first = true;
+  model.coefNames.forEach(function (nm, i) {
+    var b = model.beta[i]; if (!isFinite(b)) return;
+    if (!shownKeys[nm]) { hidden++; return; }
+    if (nm === "(Intercept)" || nm === "(drift)") { parts.push("<span class='eq-num'>" + fmt(b, 3) + "</span>"); first = false; return; }
+    var sign = b >= 0 ? (first ? "" : " + ") : " − ";
+    parts.push(sign + "<span class='eq-num'>" + fmt(Math.abs(b), 3) + "</span>·" + vsym(nm, focal) + (nm.indexOf("mean(") === 0 ? SUB_I : (est === "fd" ? "Δ" : SUB_IT)));
+    first = false;
+  });
+  var tail = hidden ? " <span class='eq-note'>+ " + hidden + " more control term" + (hidden > 1 ? "s" : "") + "</span>" : "";
+  return lhs + " = " + parts.join("") + tail;
+}
+function seFormula(seType, nGroups) {
+  if (seType === "cluster") return "Var(β̂) = (X′X)⁻¹ (Σ<sub>g</sub> X<sub>g</sub>′û<sub>g</sub>û<sub>g</sub>′X<sub>g</sub>) (X′X)⁻¹ · CR1 — clustered by person (" + nGroups + " clusters)";
+  if (seType === "robust") return "Var(β̂) = (X′X)⁻¹ (Σ<sub>i</sub> û<sub>i</sub>² x<sub>i</sub>x<sub>i</sub>′) (X′X)⁻¹ · HC1 — heteroskedasticity-robust";
+  return "Var(β̂) = σ̂² (X′X)⁻¹ — classical, assuming i.i.d. homoskedastic errors";
+}
+function yName() { return S.outcome === "wage" ? "wage" : "lwage"; }
+var EST_TRANSFORM = {
+  pooled: { lbl: "Pooled OLS — fit on the levels, all variation", eq: function (f) { return yName() + SUB_IT + " = α + β·<span class='eq-focal'>" + f + "</span>" + SUB_IT + " + γ′z" + SUB_IT + " + (u" + SUB_I + " + ε" + SUB_IT + ")  <span class='cap'>← person effect left in the error</span>"; } },
+  between: { lbl: "Between — collapse to one mean per person", eq: function (f) { return yName() + "̄" + SUB_I + " = α + β·<span class='eq-focal'>" + f + "</span>̄" + SUB_I + " + γ′z̄" + SUB_I + " + (u" + SUB_I + " + ε̄" + SUB_I + ")  <span class='cap'>← cross-person comparison only</span>"; } },
+  within: { lbl: "Fixed effects — demean within person; uᵢ cancels", eq: function (f) { return "(" + yName() + SUB_IT + " − " + yName() + "̄" + SUB_I + ") = β·(<span class='eq-focal'>" + f + "</span>" + SUB_IT + " − <span class='eq-focal'>" + f + "</span>̄" + SUB_I + ") + γ′(z" + SUB_IT + " − z̄" + SUB_I + ") + (ε" + SUB_IT + " − ε̄" + SUB_I + ")"; } },
+  fd: { lbl: "First differences — year-to-year change; uᵢ cancels", eq: function (f) { return "Δ" + yName() + SUB_IT + " = δ + β·Δ<span class='eq-focal'>" + f + "</span>" + SUB_IT + " + γ′Δz" + SUB_IT + " + Δε" + SUB_IT + "  <span class='cap'>← δ is the common drift</span>"; } },
+  random: { lbl: "Random effects — GLS quasi-demeaning by θ", eq: function (f, m) { var th = m && isFinite(m.theta) ? fmt(m.theta, 3) : "θ"; return "(" + yName() + SUB_IT + " − <span class='eq-num'>" + th + "</span>·" + yName() + "̄" + SUB_I + ") = α(1−θ) + β·(<span class='eq-focal'>" + f + "</span>" + SUB_IT + " − θ·<span class='eq-focal'>" + f + "</span>̄" + SUB_I + ") + …  <span class='cap'>θ=0 ⇒ pooled, θ→1 ⇒ fixed effects</span>"; } },
+  cre: { lbl: "Correlated RE (Mundlak) — add person-means to RE", eq: function (f) { return yName() + SUB_IT + " = α + β·<span class='eq-focal'>" + f + "</span>" + SUB_IT + " + δ·<span class='eq-focal'>" + f + "</span>̄" + SUB_I + " + γ′z" + SUB_IT + " + u" + SUB_I + " + ε" + SUB_IT + "  <span class='cap'>β equals the fixed-effects estimate</span>"; } },
+  twfe: { lbl: "Two-way fixed effects — within person and within year", eq: function (f) { return "(" + yName() + SUB_IT + " − " + yName() + "̄" + SUB_I + " − " + yName() + "̄" + SUB_T + " + " + yName() + "̄) = β·(<span class='eq-focal'>" + f + "</span> demeaned both ways) + …  <span class='cap'>removes person and year effects</span>"; } }
+};
+function renderEquation(spec, model, est) {
+  var box = $("eqContent");
+  if (!$("showEq").checked) { box.innerHTML = "<span class='muted'>Equations hidden — tick “show equations”.</span>"; return; }
+  var f = FOCAL_SHORT[spec.focal], T = EST_TRANSFORM[est] || EST_TRANSFORM.pooled;
+  var ctrlText = controlsSummary(spec) + (spec.yearFE && est !== "twfe" ? " + year effects" : "");
+  var html = "";
+  html += "<div class='eqblock'><div class='lbl'>What the symbols mean</div><div class='eqmath' style='font-size:13px;line-height:1.9'>" +
+    "<b>i</b> = a person (unit) &nbsp;·&nbsp; <b>t</b> = a year (time) &nbsp;·&nbsp; subscript <b>" + SUB_IT.replace(/<\/?sub>/g, "") + "</b> means “person i in year t”<br>" +
+    "<b>" + yName() + "</b>" + SUB_IT + " = the outcome (" + outcomeLabel() + ") &nbsp;·&nbsp; <b class='eq-focal'>" + f + "</b>" + SUB_IT + " = the focal variable (the " + FOCAL_LABEL[spec.focal] + ")<br>" +
+    "<b>α</b> = intercept / baseline &nbsp;·&nbsp; <b>β</b> = the effect being estimated (the coefficient on " + f + ") &nbsp;·&nbsp; <b>γ</b> = coefficients on the control variables <b>z</b><br>" +
+    "<b>u</b>" + SUB_I + " = the <em>person effect</em> — stable traits of person i that don't change over time (unobserved) &nbsp;·&nbsp; <b>ε</b>" + SUB_IT + " = the <em>idiosyncratic error</em>, random year-to-year variation<br>" +
+    "an <b>overbar</b> (e.g. " + yName() + "̄" + SUB_I + ") = that person's average across their years &nbsp;·&nbsp; <b>Δ</b> = year-to-year change &nbsp;·&nbsp; <b>θ</b> = random-effects weight (0 → pooled, 1 → fixed effects) &nbsp;·&nbsp; a <b>hat</b> (β̂) = an estimated value</div></div>" +
+    "<div class='eqblock'><div class='lbl'>1 · Structural model</div><div class='eqmath'>" +
+    yName() + SUB_IT + " = α + β·<span class='eq-focal'>" + f + "</span>" + SUB_IT + " + γ′z" + SUB_IT + " + u" + SUB_I + " + ε" + SUB_IT +
+    "<br><span class='cap'>z = { " + ctrlText + " } · u" + SUB_I + " = stable person trait (unobserved) · the target is β, the " + FOCAL_LABEL[spec.focal] + "</span></div></div>";
+  html += "<div class='eqblock'><div class='lbl'>2 · What " + ESTIMATOR_LABEL[est] + " actually fits</div><div class='eqmath'>" + T.eq(f, model) + "</div></div>";
+  html += "<div class='eqblock'><div class='lbl'>3 · Fitted with your data</div><div class='eqmath'>" + fittedEquation(model, spec.focal, est) +
+    ((est === "within" || est === "twfe") ? "  <span class='cap'>(+ " + (model && model.nGroups ? model.nGroups : "") + " person intercepts" + (est === "twfe" ? " + year effects" : "") + ", absorbed)</span>" : "") + "</div></div>";
+  html += "<div class='eqblock'><div class='lbl'>4 · Standard errors (" + spec.seType + ")</div><div class='eqmath' style='font-size:13px'>" + seFormula(spec.seType, model && model.nGroups ? model.nGroups : "G") + "</div></div>";
+  box.innerHTML = html;
+}
+
+function renderSingle() {
+  var focal = S.focal;
+  var bars = E.ALL_ESTIMATORS.map(function (e) { return E.runSpec(DATA, ssSpec(e), META); });
+  drawEstBars(bars);
+  // The classic Hausman test is valid under the conventional (non-robust) covariance, so it is
+  // computed from classical-vcov FE and RE models regardless of the SE shown elsewhere.
+  function classicalSpec(est) { var s = ssSpec(est); s.seType = "classical"; return s; }
+  var feM = E.runSpec(DATA, classicalSpec("within"), META).model, reM = E.runSpec(DATA, classicalSpec("random"), META).model;
+  var h = E.hausmanFull(feM, reM), hb = $("hausmanResult");
+  if (h.ok) {
+    var concl = h.pval < 0.05 ? "<span class='badge badge-success'>Reject H₀</span> Fixed effects preferred — the FE and RE coefficients differ systematically, signalling correlation between the person effect and the regressors." : "<span class='badge badge-info'>Cannot reject H₀</span> Random effects may be the more efficient choice here.";
+    hb.innerHTML = "H = " + fmt(h.stat, 2) + " (" + h.df + " df), p = " + (h.pval < 0.0001 ? "&lt;0.0001" : fmt(h.pval, 4)) + "<div class='mt-2'>" + concl + "</div><div class='help-text mt-2'>Joint test over the " + h.df + " time-varying coefficient(s) common to FE and RE.</div>";
+  } else hb.innerHTML = "<span class='muted'>Hausman test unavailable: " + (h.msg || "not identified") + ".</span>";
+  var sel = E.runSpec(DATA, ssSpec(S.ss.estimator), META);
+  renderEquation(ssSpec(S.ss.estimator), sel.model, S.ss.estimator);
+  $("ssTitle").textContent = ESTIMATOR_LABEL[S.ss.estimator] + " · " + FOCAL_LABEL[focal];
+  $("ssTable").innerHTML = sel.identified ? regressionTable(sel.model, focal) : "<div class='alert alert-warning'>" + ESTIMATOR_LABEL[S.ss.estimator] + " cannot identify <strong>" + FOCAL_SHORT[focal] + "</strong>: it does not vary within persons, so the within/difference transformation removes it. This is the central lesson about time-invariant regressors.</div>";
+  drawResiduals(sel.model); drawHist(sel.model); drawQQ(sel.model);
+  var pooled = bars.filter(function (b) { return b.estimator === "pooled"; })[0], within = bars.filter(function (b) { return b.estimator === "within"; })[0];
+  var box = $("ssInterpretation"), msg = "";
+  if (pooled && pooled.identified && within && within.identified) {
+    var pct = Math.round(100 * (1 - within.b / pooled.b));
+    msg = "Pooled OLS puts the " + FOCAL_LABEL[focal] + " at <strong>" + fmt(pooled.b, 3) + "</strong>; Fixed Effects cuts it to <strong>" + fmt(within.b, 3) + "</strong> — about " + pct + "% smaller. That difference is confounding by stable person traits that FE removes.";
+  } else if (within && !within.identified) {
+    msg = "Fixed Effects and First Differences return nothing for <strong>" + FOCAL_SHORT[focal] + "</strong>: it is constant within each person over 1980–87. Only Pooled OLS, Between and Random Effects can speak to it — and they lean on the assumption that schooling is uncorrelated with unobserved ability.";
   }
+  box.innerHTML = "<h4>What the estimators disagree about</h4><p>" + msg + "</p>";
+}
 
-  var d = coefAt(model, "D");
-  var sig = d.idx >= 0 ? (model.pval[d.idx] < 0.001 ? "***" : model.pval[d.idx] < 0.01 ? "**" : model.pval[d.idx] < 0.05 ? "*" : "") : "";
-  var sigClass = d.idx >= 0 && model.pval[d.idx] < 0.05 ? "sig" : "not-sig";
-
-  content += `<h3 style="margin-bottom:12px">${name}</h3>`;
-  content += `<p class="help-text muted" style="margin-bottom:12px">${description}</p>`;
-  content += `<div class="help-text muted" style="margin:-6px 0 10px">SE type: <strong>${model.seType || "classical"}</strong></div>`;
-
-  content += `<table class="stat-table">`;
-  content += `<thead><tr><th>Term</th><th class="num">Coef</th><th class="num">SE</th><th class="num">t</th><th class="num">p</th></tr></thead><tbody>`;
-  for (var i = 0; i < model.coefNames.length; i++) {
-    var nm = model.coefNames[i] || ("x" + i);
-    var cls = nm === "D" ? sigClass : "";
-    var stars = nm === "D" ? sig : "";
-    content += `<tr><td>${nm === "t2" ? "t²" : nm}</td><td class="num"><span class="${cls}">${fmt(model.beta[i])} ${stars}</span></td><td class="num">${fmt(model.se[i])}</td><td class="num">${fmt(model.tstat[i], 2)}</td><td class="num">${fmt(model.pval[i], 4)}</td></tr>`;
-  }
-  content += `</tbody></table>`;
-
-  content += `<div class="mt-3"><table class="stat-table"><tbody>`;
-  content += `<tr><td>R²</td><td class="num">${fmt(model.r2)}</td></tr>`;
-  content += `<tr><td>N observations</td><td class="num">${model.n}</td></tr>`;
-  content += `<tr><td>Degrees of freedom</td><td class="num">${model.df}</td></tr>`;
-  if (which === "fe" || which === "re") content += `<tr><td>N groups</td><td class="num">${model.nGroups}</td></tr>`;
-  if (which === "re" && isFinite(model.theta)) content += `<tr><td>θ (quasi-demean factor)</td><td class="num">${fmt(model.theta)}</td></tr>`;
-  content += `</tbody></table></div>`;
-
-  // 95% CI
-  if (d.idx >= 0) {
-    var C = ci(d.b, d.se);
-    content += `<div class="mt-3"><strong>95% CI for D:</strong> [${fmt(C[0])}, ${fmt(C[1])}]</div>`;
-  }
-
-  // Interpretation
-  var bias = d.idx >= 0 ? (d.b - S.betaTrue) : NaN;
-  var biasPercent = S.betaTrue !== 0 ? (bias / S.betaTrue * 100) : 0;
-  content += `<div class="interpretation mt-3">`;
-  content += `<h4>Interpretation</h4>`;
-  content += `<p><strong>Bias (for D):</strong> β̂ - β = ${fmt(bias)} (${fmt(biasPercent, 1)}% of true mean effect)</p>`;
-  if (isFinite(bias) && isFinite(d.se) && Math.abs(bias) < d.se) {
-    content += `<p class="mt-2" style="color:#86efac">✓ Estimate is within 1 SE of true value</p>`;
-  } else if (isFinite(bias) && isFinite(d.se) && Math.abs(bias) < 2 * d.se) {
-    content += `<p class="mt-2" style="color:#fde047">⚠ Estimate is within 2 SE of true value (acceptable)</p>`;
+// ============== SIDEBAR / SHARED ==============
+function renderSidebar() {
+  $("focalHelp").textContent = FOCAL_HELP[S.focal];
+  var persons = Object.keys(byPerson(DATA)).length;
+  $("dataSummary").innerHTML = "<strong>" + persons + "</strong> men · <strong>" + DATA.length + "</strong> person-years · " + META.years[0] + "–" + META.years[META.years.length - 1] +
+    "<br>Outcome: <span class='pill'>" + outcomeLabel() + "</span> · focal: <span class='pill'>" + FOCAL_SHORT[S.focal] + "</span>";
+  $("learningObjective").innerHTML = "One dataset, one question — the <strong>" + FOCAL_LABEL[S.focal] + "</strong> — and many defensible analyses. The spread of results across reasonable analytic choices is the “garden of forking paths.” Build that garden by hand on real wage data and see which conclusions hold.";
+}
+// ---- Data Overview: descriptives & switchers ----
+function varStats(key) {
+  var by = byPerson(DATA), vals = DATA.map(function (r) { return r[key]; });
+  var m = E.mean(vals), sd = Math.sqrt(E.variance(vals)), ids = Object.keys(by);
+  var means = [], wss = 0;
+  ids.forEach(function (id) { var g = by[id].map(function (r) { return r[key]; }), mi = E.mean(g); means.push(mi); g.forEach(function (v) { wss += (v - mi) * (v - mi); }); });
+  return { mean: m, sd: sd, withinSD: Math.sqrt(wss / Math.max(1, DATA.length - ids.length)), betweenSD: Math.sqrt(E.variance(means)) };
+}
+function switchersInfo() {
+  var by = byPerson(DATA), f = S.focal, a0 = 0, a1 = 0, sw = 0;
+  Object.keys(by).forEach(function (id) {
+    var v = by[id].map(function (r) { return r[f]; }), mn = Math.min.apply(null, v), mx = Math.max.apply(null, v);
+    if (f === "educ") { if (mx > mn) sw++; else a0++; }
+    else { if (mx === 0) a0++; else if (mn === 1) a1++; else sw++; }
+  });
+  return { a0: a0, a1: a1, sw: sw, N: Object.keys(by).length };
+}
+function renderDataExtras() {
+  var persons = Object.keys(byPerson(DATA)).length, key = outcomeKey();
+  // cards
+  var cards = $("dataCards"); cards.innerHTML = "";
+  function card(t, v, f) { var d = document.createElement("div"); d.className = "card"; d.innerHTML = "<div class='title'>" + t + "</div><div class='value'>" + v + "</div><div class='foot'>" + (f || "") + "</div>"; cards.appendChild(d); }
+  card("Workers", persons, "panel units (i)");
+  card("Person-years", DATA.length, META.years[0] + "–" + META.years[META.years.length - 1] + " (" + META.years.length + " waves)");
+  card("Mean " + outcomeLabel(), fmt(E.mean(DATA.map(function (r) { return r[key]; })), 3), "");
+  if (S.focal === "educ") {
+    card("Mean schooling", fmt(E.mean(DATA.map(function (r) { return r.educ; })), 2) + " yrs", "fixed within person");
   } else {
-    content += `<p class="mt-2" style="color:#fca5a5">✗ Estimate is more than 2 SE from true value (biased)</p>`;
+    var g1 = DATA.filter(function (r) { return r[S.focal] === 1; }), g0 = DATA.filter(function (r) { return r[S.focal] === 0; });
+    card("Share " + FOCAL_SHORT[S.focal] + " = 1", Math.round(100 * g1.length / DATA.length) + "%", "of person-years");
+    card("Raw gap", fmt(E.mean(g1.map(function (r) { return r[key]; })) - E.mean(g0.map(function (r) { return r[key]; })), 3), "mean(1) − mean(0), no controls");
   }
-  content += `</div>`;
-
-  content += `<div class="alert alert-info mt-3"><strong>Key assumption:</strong> ${assumptions}</div>`;
-
-  document.getElementById("modelDetailContent").innerHTML = content;
-}
-
-// ============== SUMMARY CONTENT ==============
-function buildSummary(sim, cs, pooled, fe, re) {
-  var n = sim.length;
-  var yVals = sim.map(r => r.y);
-  var yMean = mean(yVals), ySd = Math.sqrt(variance(yVals));
-  var Dmean = mean(sim.map(r => r.D));
-
-  // Variance decomposition
-  var by = {}, means = [], wVars = [];
-  for (var i = 0; i < sim.length; i++) {
-    var r = sim[i];
-    if (!by[r.pid]) by[r.pid] = [];
-    by[r.pid].push(r.y);
-  }
-  for (var k in by) {
-    var arr = by[k];
-    var m = mean(arr);
-    means.push(m);
-    var vv = 0;
-    for (var j = 0; j < arr.length; j++) { vv += (arr[j] - m) * (arr[j] - m); }
-    vv /= Math.max(1, arr.length - 1);
-    wVars.push(vv);
-  }
-  var vb = variance(means);
-  var vw = wVars.length ? wVars.reduce((a, b) => a + b, 0) / wVars.length : 0;
-  var tot = vb + vw;
-  var iccEmp = tot === 0 ? NaN : vb / tot;
-
-  // Within-person variation in D
-  var dBy = {};
-  for (i = 0; i < sim.length; i++) {
-    var r2 = sim[i];
-    if (!dBy[r2.pid]) dBy[r2.pid] = [];
-    dBy[r2.pid].push(r2.D);
-  }
-  var switchCount = 0, totalPairs = 0;
-  for (k in dBy) {
-    var dArr = dBy[k];
-    for (j = 1; j < dArr.length; j++) {
-      if (dArr[j] !== dArr[j - 1]) switchCount++;
-      totalPairs++;
-    }
-  }
-  var actualSwitchRate = totalPairs > 0 ? switchCount / totalPairs : 0;
-
-  var html = `
-    <div class="grid-2">
-      <div>
-        <h3>Sample Characteristics</h3>
-        <table class="stat-table">
-          <tr><td>Total observations</td><td class="num">${S.N} × ${S.T} = ${n}</td></tr>
-          <tr><td>Outcome mean (SD)</td><td class="num">${fmt(yMean, 2)} (${fmt(ySd, 2)})</td></tr>
-          <tr><td>Treatment prevalence</td><td class="num">${fmt(Dmean * 100, 1)}%</td></tr>
-          <tr><td>Actual switching rate</td><td class="num">${fmt(actualSwitchRate * 100, 1)}%</td></tr>
-          <tr><td>Empirical ICC</td><td class="num">${fmt(iccEmp)}</td></tr>
-        </table>
-      </div>
-      <div>
-        <h3>Current Parameters</h3>
-        <table class="stat-table">
-          <tr><td>True β</td><td class="num">${fmt(S.betaTrue)}</td></tr>
-          <tr><td>Random slope SD (σβ)</td><td class="num">${fmt(S.sigmaB)}</td></tr>
-          <tr><td>Groups (G), Δβ</td><td class="num">${S.nGroups} , ${fmt(S.groupDeltaBeta)}</td></tr>
-          <tr><td>Selection (ρ)</td><td class="num">${fmt(S.rhoSel)} ${S.rhoSel > 0.5 ? '<span class="badge badge-warning">Bias likely</span>' : '<span class="badge badge-success">Low</span>'}</td></tr>
-          <tr><td>Time trend</td><td class="num">${S.timeTrendOn ? fmt(S.timeTrendSlope) + '/wave' : 'Off'}</td></tr>
-          <tr><td>Measurement error</td><td class="num">${fmt(S.sigmaME)}</td></tr>
-        </table>
-      </div>
-    </div>
-  `;
-
-  document.getElementById("summaryContent").innerHTML = html;
-}
-
-function buildDesign(rows, opts) {
-  var includeIntercept = !!opts.includeIntercept;
-  var includeTrend = !!opts.includeTrend;
-  var includeQuad = !!opts.includeQuad;
-  var includeGroupFE = !!opts.includeGroupFE;
-  var X = new Array(rows.length);
-  var y = new Array(rows.length);
-  var ids = new Array(rows.length);
-  var coefNames = [];
-  if (includeIntercept) coefNames.push("Intercept");
-  coefNames.push("D");
-  if (includeTrend) coefNames.push("t");
-  if (includeQuad) coefNames.push("t2");
-  if (includeGroupFE && S.nGroups > 1) {
-    for (var g = 2; g <= S.nGroups; g++) coefNames.push("G" + g);
-  }
-
-  for (var i = 0; i < rows.length; i++) {
-    var r = rows[i];
-    y[i] = r.y;
-    ids[i] = r.pid;
-    var row = [];
-    if (includeIntercept) row.push(1);
-    row.push(r.D);
-    if (includeTrend) row.push(r.wave);
-    if (includeQuad) row.push(r.wave * r.wave);
-    if (includeGroupFE && S.nGroups > 1) {
-      for (g = 2; g <= S.nGroups; g++) row.push(r.gid === g ? 1 : 0);
-    }
-    X[i] = row;
-  }
-  return { X, y, ids, coefNames };
-}
-
-// ============== MAIN RENDER ==============
-function computeAndRender() {
-  updateLabels();
-  var sim = simulate();
-
-  var cross = sim.filter(r => r.wave === S.scatterWave);
-  var pooled = sim;
-
-  var seType = S.seType || "classical";
-  var csDsgn = buildDesign(cross, { includeIntercept: true, includeTrend: false, includeQuad: false, includeGroupFE: S.specGroupFE });
-  var pooledDsgn = buildDesign(pooled, { includeIntercept: true, includeTrend: S.specTrend, includeQuad: S.specQuad, includeGroupFE: S.specGroupFE });
-  var feDsgn = buildDesign(pooled, { includeIntercept: false, includeTrend: S.specTrend, includeQuad: S.specQuad, includeGroupFE: false });
-
-  var cs = ols(csDsgn.X, csDsgn.y, { seType, clusterIds: csDsgn.ids, coefNames: csDsgn.coefNames });
-  var pooledOLS = ols(pooledDsgn.X, pooledDsgn.y, { seType, clusterIds: pooledDsgn.ids, coefNames: pooledDsgn.coefNames });
-  var fe = feWithin(feDsgn.ids, feDsgn.X, feDsgn.y, { seType, coefNames: feDsgn.coefNames });
-  var re = randomEffects(pooledDsgn.ids, pooledDsgn.X, pooledDsgn.y, { seType, coefNames: pooledDsgn.coefNames });
-
-  // Store for diagnostics
-  window._lastResults = { sim, cross, pooled, cs, pooledOLS, fe, re };
-
-  // Build summary
-  buildSummary(sim, cs, pooledOLS, fe, re);
-
-  // Tab rendering
-  if (S.viz === "descr") {
-    document.getElementById("descrArea").style.display = "block";
-    document.getElementById("estArea").style.display = "none";
-    document.getElementById("diagArea").style.display = "none";
-    document.getElementById("learnArea").style.display = "none";
-
-    drawScatter(document.getElementById("chart-scatter"), cross.map(r => ({ x: r.D, y: r.y, gid: r.gid })), cs, { colorByGroup: S.colorByGroup, nGroups: S.nGroups });
-
-    // Spaghetti plot
-    var ids = [], seen = {};
-    for (var i = 0; i < pooled.length; i++) {
-      var pid = pooled[i].pid;
-      if (!seen[pid]) { seen[pid] = 1; ids.push(pid); }
-    }
-    var k = Math.min(Math.max(5, Math.floor(S.spaghettiN || 20)), ids.length);
-    var rand = mulberry32(1234 + S.seed);
-    var chosen = {}, arr = [];
-    while (Object.keys(chosen).length < k && ids.length > 0) {
-      var idx = Math.floor(rand() * ids.length);
-      if (!chosen[idx]) { chosen[idx] = 1; arr.push(ids[idx]); }
-    }
-    var spaghetti = [], summary = [];
-    for (i = 0; i < arr.length; i++) {
-      var id = arr[i];
-      var rows = pooled.filter(r => r.pid === id);
-      var ser = rows.map(r => ({ t: r.wave, y: r.y }));
-      spaghetti.push({ id, gid: rows.length ? rows[0].gid : 1, series: ser });
-    }
-    for (var t = 1; t <= S.T; t++) {
-      var vals = pooled.filter(r => r.wave === t).map(r => r.y);
-      if (vals.length) {
-        summary.push({
-          t,
-          mean: mean(vals),
-          median: quantile(vals, 0.5),
-          p25: quantile(vals, 0.25),
-          p75: quantile(vals, 0.75)
-        });
-      }
-    }
-    drawLines(document.getElementById("chart-lines"), spaghetti, summary, S.T, { colorByGroup: S.colorByGroup, nGroups: S.nGroups });
-
-    drawWaveMeans(document.getElementById("chart-wave-means"), pooled, S.T);
-    drawBetaDist(document.getElementById("chart-beta-dist"), pooled, { betaMean: S.betaTrue });
-  }
-
-  if (S.viz === "est") {
-    document.getElementById("descrArea").style.display = "none";
-    document.getElementById("estArea").style.display = "block";
-    document.getElementById("diagArea").style.display = "none";
-    document.getElementById("learnArea").style.display = "none";
-
-    var csD = coefAt(cs, "D");
-    var pooledD = coefAt(pooledOLS, "D");
-    var feD = coefAt(fe, "D");
-    var reD = coefAt(re, "D");
-    var estRows = [
-      { name: "Cross-Section", b: csD.b, se: csD.se, color: "#60a5fa" },
-      { name: "Pooled OLS", b: pooledD.b, se: pooledD.se, color: "#818cf8" },
-      { name: "Fixed Effects", b: feD.b, se: feD.se, color: "#34d399" },
-      { name: "Random Effects", b: reD.b, se: reD.se, color: "#fbbf24" }
-    ];
-    drawBarsWithCI(document.getElementById("chart-bars"), estRows, S.betaTrue);
-
-    // Variance decomposition table
-    var iccTrue = (S.sigmaU * S.sigmaU) / (S.sigmaU * S.sigmaU + S.sigmaE * S.sigmaE + S.sigmaME * S.sigmaME);
-    var vhtml = `
-      <tr><td>Between-person variance (σ²<sub>u</sub>)</td><td class="num">${fmt(S.sigmaU * S.sigmaU)}</td><td class="muted">Individual heterogeneity</td></tr>
-      <tr><td>Within-person variance (σ²<sub>ε</sub>)</td><td class="num">${fmt(S.sigmaE * S.sigmaE)}</td><td class="muted">Idiosyncratic shocks</td></tr>
-      <tr><td>Measurement error (σ²<sub>me</sub>)</td><td class="num">${fmt(S.sigmaME * S.sigmaME)}</td><td class="muted">Adds noise, not bias</td></tr>
-      <tr><td><strong>ICC (intraclass correlation)</strong></td><td class="num"><strong>${fmt(iccTrue)}</strong></td><td class="muted">σ²<sub>u</sub> / (σ²<sub>u</sub> + σ²<sub>ε</sub> + σ²<sub>me</sub>)</td></tr>
-    `;
-    document.getElementById("varianceTable").innerHTML = vhtml;
-
-    // Hausman test
-    var haus = hausmanTest(fe, re);
-    var hausHtml = `
-      <table class="stat-table">
-        <tr><td>H statistic</td><td class="num">${fmt(haus.stat, 2)}</td></tr>
-        <tr><td>p-value</td><td class="num">${fmt(haus.pval, 4)}</td></tr>
-      </table>
-      <p class="help-text mt-2">${haus.conclusion}</p>
-    `;
-    document.getElementById("hausmanResult").innerHTML = hausHtml;
-
-    // Model details
-    fillModelDetails(S.modelDetail, cs, pooledOLS, fe, re);
-
-    // Bias alert
-    var csBias = Math.abs(csD.b - S.betaTrue);
-    var feBias = Math.abs(feD.b - S.betaTrue);
-    var alertHtml = "";
-    if (S.rhoSel > 0.3 && csBias > 0.1 && feBias < csBias * 0.5) {
-      alertHtml = `<div class="alert alert-warning">
-        <strong>Selection bias detected!</strong> Cross-section and Pooled OLS show substantial bias
-        (${fmt(csBias, 2)} from true β) while Fixed Effects is closer (${fmt(feBias, 2)} from true β).
-        This is because ρ = ${fmt(S.rhoSel)} creates correlation between treatment and unobserved individual effects.
-      </div>`;
-    } else if (S.rhoSel < 0.1 && csBias < 0.15) {
-      alertHtml = `<div class="alert alert-success">
-        <strong>No substantial bias.</strong> With low selection (ρ = ${fmt(S.rhoSel)}), all estimators
-        perform similarly. This is similar to a randomized experiment.
-      </div>`;
-    }
-    document.getElementById("biasAlert").innerHTML = alertHtml;
-
-    drawSeSensitivity(document.getElementById("chart-se-sensitivity"), S.modelDetail, cross, pooled, { cs, pooledOLS, fe, re });
-    drawGroupSplit(document.getElementById("chart-group-split"), pooled, { estimator: S.groupEstimator, seType, includeTrend: S.specTrend, includeQuad: S.specQuad, includeGroupFE: S.specGroupFE });
-  }
-
-  if (S.viz === "diag") {
-    document.getElementById("descrArea").style.display = "none";
-    document.getElementById("estArea").style.display = "none";
-    document.getElementById("diagArea").style.display = "block";
-    document.getElementById("learnArea").style.display = "none";
-
-    var which = S.diagModel || "pooled";
-    var points = [];
-    if (which === "pooled") {
-      points = pooledOLS.fitted.map((f, i) => ({ fit: f, resid: pooledOLS.resid[i] }));
-    } else if (which === "cs") {
-      points = cs.fitted.map((f, i) => ({ fit: f, resid: cs.resid[i] }));
-    } else if (which === "fe") {
-      points = fe.fitted.map((f, i) => ({ fit: f, resid: fe.resid[i] }));
-    } else if (which === "re") {
-      points = re.fitted.map((f, i) => ({ fit: f, resid: re.resid[i] }));
-    }
-
-    drawResiduals(document.getElementById("chart-rvf"), points);
-    drawHist(document.getElementById("chart-hist"), points.map(p => p.resid));
-    drawQQ(document.getElementById("chart-qq"), points.map(p => p.resid));
-
-    // Diagnostic interpretation
-    var residMean = mean(points.map(p => p.resid));
-    var residVar = variance(points.map(p => p.resid));
-    var interpHtml = `
-      <p><strong>Residual mean:</strong> ${fmt(residMean, 4)} (should be ≈ 0)</p>
-      <p><strong>Residual variance:</strong> ${fmt(residVar, 3)}</p>
-      <p class="mt-2">The residuals appear ${Math.abs(residMean) < 0.01 ? "well-centered" : "slightly off-center"}.
-      Check the Q-Q plot for normality—deviations in the tails suggest heavy-tailed or skewed errors.</p>
-    `;
-    document.getElementById("diagInterpretation").innerHTML = interpHtml;
-  }
-
-  if (S.viz === "learn") {
-    document.getElementById("descrArea").style.display = "none";
-    document.getElementById("estArea").style.display = "none";
-    document.getElementById("diagArea").style.display = "none";
-    document.getElementById("learnArea").style.display = "block";
-  }
-
-  // Cards
-  var cards = [];
-  function addCard(title, value, ciVals, foot, highlight) {
-    cards.push({ title, value, ciVals, foot, highlight });
-  }
-  var csD2 = coefAt(cs, "D");
-  var pooledD2 = coefAt(pooledOLS, "D");
-  var feD2 = coefAt(fe, "D");
-  var reD2 = coefAt(re, "D");
-  var csCI = ci(csD2.b, csD2.se);
-  var pooledCI = ci(pooledD2.b, pooledD2.se);
-  var feCI = ci(feD2.b, feD2.se);
-  var reCI = ci(reD2.b, reD2.se);
-
-  addCard("True β", fmt(S.betaTrue), "", "Ground truth", true);
-  addCard("Cross-Section", fmt(csD2.b), `[${fmt(csCI[0], 2)}, ${fmt(csCI[1], 2)}]`, `R²=${fmt(cs.r2, 2)}`);
-  addCard("Pooled OLS", fmt(pooledD2.b), `[${fmt(pooledCI[0], 2)}, ${fmt(pooledCI[1], 2)}]`, `R²=${fmt(pooledOLS.r2, 2)}`);
-  addCard("Fixed Effects", fmt(feD2.b), `[${fmt(feCI[0], 2)}, ${fmt(feCI[1], 2)}]`, `within R²=${fmt(fe.r2, 2)}`);
-  addCard("Random Effects", fmt(reD2.b), `[${fmt(reCI[0], 2)}, ${fmt(reCI[1], 2)}]`, `θ=${fmt(re.theta, 2)}`);
-
-  var cardsDiv = document.getElementById("cards");
-  cardsDiv.innerHTML = "";
-  for (i = 0; i < cards.length; i++) {
-    var c = cards[i];
-    var el = document.createElement("div");
-    el.className = "card" + (c.highlight ? " highlight" : "");
-    var inner = `<div class="title">${c.title}</div><div class="value">${c.value}</div>`;
-    if (c.ciVals) inner += `<div class="muted" style="font-size:11px;margin-top:4px">95% CI: ${c.ciVals}</div>`;
-    if (c.foot) inner += `<div class="foot">${c.foot}</div>`;
-    el.innerHTML = inner;
-    cardsDiv.appendChild(el);
+  // descriptive table
+  var rows = [["lwage", "log hourly wage"], ["wage", "hourly wage ($)"], [S.focal, FOCAL_SHORT[S.focal]], ["exper", "experience"], ["hours", "hours"], ["union", "union"], ["married", "married"], ["educ", "schooling"]]
+    .filter(function (r, i, arr) { return arr.findIndex(function (x) { return x[0] === r[0]; }) === i; });
+  var html = "<table class='stat-table'><thead><tr><th>Variable</th><th class='num'>Mean</th><th class='num'>SD</th><th class='num'>Within SD</th><th class='num'>Between SD</th></tr></thead><tbody>";
+  rows.forEach(function (r) { var s = varStats(r[0]); html += "<tr><td>" + r[1] + "</td><td class='num'>" + fmt(s.mean, 2) + "</td><td class='num'>" + fmt(s.sd, 2) + "</td><td class='num'>" + fmt(s.withinSD, 2) + "</td><td class='num'>" + fmt(s.betweenSD, 2) + "</td></tr>"; });
+  html += "</tbody></table><p class='help-text mt-2'>“Within SD” is variation over time for the same person; “Between SD” is variation across people. A variable with near-zero within SD (e.g. schooling) cannot be identified by Fixed Effects.</p>";
+  $("descTable").innerHTML = html;
+  // switchers
+  var sw = switchersInfo(), pct = function (x) { return Math.round(100 * x / sw.N); };
+  if (S.focal === "educ") {
+    $("switchTable").innerHTML = "<table class='stat-table'><tbody><tr><td>Schooling constant within person</td><td class='num'>" + sw.a0 + " (" + pct(sw.a0) + "%)</td></tr><tr><td>Schooling changes within person</td><td class='num'>" + sw.sw + " (" + pct(sw.sw) + "%)</td></tr></tbody></table>";
+    $("switchNote").innerHTML = "Essentially nobody changes years of schooling during 1980–87, so there are <strong>no switchers</strong> — Fixed Effects and First Differences have nothing to use and cannot identify the return to schooling.";
+  } else {
+    $("switchTable").innerHTML = "<table class='stat-table'><thead><tr><th>Group</th><th class='num'>Persons</th><th class='num'>Share</th></tr></thead><tbody>" +
+      "<tr><td>Never " + FOCAL_SHORT[S.focal] + " (always 0)</td><td class='num'>" + sw.a0 + "</td><td class='num'>" + pct(sw.a0) + "%</td></tr>" +
+      "<tr><td>Always " + FOCAL_SHORT[S.focal] + " (always 1)</td><td class='num'>" + sw.a1 + "</td><td class='num'>" + pct(sw.a1) + "%</td></tr>" +
+      "<tr style='background:#0c1929'><td><strong>Switchers</strong></td><td class='num'><strong>" + sw.sw + "</strong></td><td class='num'><strong>" + pct(sw.sw) + "%</strong></td></tr></tbody></table>";
+    $("switchNote").innerHTML = "Fixed Effects and First Differences identify the " + FOCAL_LABEL[S.focal] + " <strong>only from the " + sw.sw + " switchers</strong> (" + pct(sw.sw) + "%). The " + (sw.a0 + sw.a1) + " never/always persons contribute nothing to within estimates — which is why FE can be less precise.";
   }
 }
 
-// ============== UI BINDINGS ==============
-function bindRange(id, key) {
-  var el = document.getElementById(id);
-  el.value = S[key];
-  el.addEventListener("input", function(e) {
-    var v = parseFloat(e.target.value);
-    if (key === "N" || key === "T" || key === "nGroups" || key === "scatterWave" || key === "spaghettiN") v = Math.round(v);
-    S[key] = v;
-    computeAndRender();
+function renderAll() {
+  renderSidebar();
+  if (S.viz === "data") { renderDataExtras(); drawSpaghetti(); drawDist(); drawByGroup(); drawVariance(); }
+  else if (S.viz === "multi") renderMulti();
+  else if (S.viz === "single") renderSingle();
+}
+
+// ============== GUIDED LEARNING ==============
+function setFocal(f) {
+  S.focal = f; S.multiResults = null; S.multiSummary = null;
+  Array.prototype.forEach.call(document.getElementsByName("focal"), function (el) { el.checked = el.value === f; });
+  renderAll(); syncHash();
+}
+
+var LESSON = [
+  { n: "Step 1 of 6 · The question", t: "We'll estimate the <b>union wage premium</b> and learn why the estimate moves. We begin on Data Overview. Click Next.", act: function () { setFocal("union"); setViz("data"); } },
+  { n: "Step 2 of 6 · Where the variation lives", t: "Find the <b>“Who identifies the effect? (switchers)”</b> table. Fixed Effects uses only the switchers — note how many there are versus the always/never groups.", act: function () { setViz("data"); } },
+  { n: "Step 3 of 6 · Build the universe", t: "Open <b>Specification Curve</b> and click <b>Build the multiverse →</b>. Read the cards: median, range, % significant.", act: function () { setViz("multi"); } },
+  { n: "Step 4 of 6 · Read the drivers", t: "In the dashboard below the curve, notice Fixed-Effects / First-Difference specs cluster at the <b>low</b> end and Pooled / Between at the <b>high</b> end. That gap is selection.", act: function () { setViz("multi"); } },
+  { n: "Step 5 of 6 · Test the whole curve", t: "Click <b>Test the whole curve</b> to run randomization inference. Is the curve distinguishable from “no effect”?", act: function () { setViz("multi"); } },
+  { n: "Step 6 of 6 · The identification limit", t: "Finally, set the focal effect to <b>Returns to schooling</b> in the left sidebar and rebuild. Half the universe vanishes — Fixed Effects cannot identify a regressor that never changes within a person. Lesson complete! ✕ to close.", act: function () { setViz("multi"); } }
+];
+function showLesson(i) {
+  if (i < 0 || i >= LESSON.length) { closeLesson(); return; }
+  S.lessonStep = i; var step = LESSON[i];
+  $("lessonBar").style.display = "block"; document.body.style.paddingBottom = "96px";
+  $("lessonStepN").textContent = step.n; $("lessonStepText").innerHTML = step.t;
+  $("lessonPrev").disabled = (i === 0); $("lessonNext").textContent = (i === LESSON.length - 1) ? "Finish" : "Next →";
+  if (step.act) step.act();
+}
+function closeLesson() { S.lessonStep = -1; $("lessonBar").style.display = "none"; document.body.style.paddingBottom = ""; }
+
+// ============== SHAREABLE PERMALINKS ==============
+function stateToHash() {
+  var on = E.CONTROL_KEYS.concat(["race"]).filter(function (k) { return S.ss.controls[k]; });
+  var p = { focal: S.focal, outcome: S.outcome, se: S.seType, tab: S.viz, est: S.ss.estimator, ctrl: on.join(","), yfe: S.ss.yearFE ? 1 : 0, samp: S.ss.sample };
+  return "#" + Object.keys(p).map(function (k) { return k + "=" + encodeURIComponent(p[k]); }).join("&");
+}
+function syncHash() { try { history.replaceState(null, "", stateToHash()); } catch (e) {} }
+function applyHash() {
+  var h = (location.hash || "").replace(/^#/, ""); if (!h) return;
+  var q = {}; h.split("&").forEach(function (s) { var kv = s.split("="); q[kv[0]] = decodeURIComponent(kv[1] || ""); });
+  if (q.focal && FOCAL_LABEL[q.focal]) S.focal = q.focal;
+  if (q.outcome === "wage" || q.outcome === "lwage") S.outcome = q.outcome;
+  if (["classical", "robust", "cluster"].indexOf(q.se) >= 0) S.seType = q.se;
+  if (q.est && E.ESTIMATORS_ALL.indexOf(q.est) >= 0) S.ss.estimator = q.est;
+  if (q.samp && ["full", "nohealth", "trim"].indexOf(q.samp) >= 0) S.ss.sample = q.samp;
+  if (q.yfe != null) S.ss.yearFE = q.yfe === "1";
+  if (q.ctrl != null) { var arr = q.ctrl ? q.ctrl.split(",") : []; Object.keys(S.ss.controls).forEach(function (k) { S.ss.controls[k] = arr.indexOf(k) >= 0; }); }
+  if (q.tab && ["data", "multi", "single", "export", "learn"].indexOf(q.tab) >= 0) S.viz = q.tab;
+}
+function syncDom() {
+  Array.prototype.forEach.call(document.getElementsByName("focal"), function (el) { el.checked = el.value === S.focal; });
+  $("outcome").value = S.outcome; $("seType").value = S.seType;
+  $("ssEstimator").value = S.ss.estimator; $("ssSample").value = S.ss.sample; $("ssYearFE").checked = S.ss.yearFE;
+}
+
+// ============== UI BINDING ==============
+function buildAxisControls() {
+  var ec = $("axisEstimators"); ec.innerHTML = "";
+  E.ESTIMATORS_ALL.forEach(function (e) {
+    var l = document.createElement("label"); l.className = "opt";
+    l.innerHTML = "<input type='checkbox' value='" + e + "' " + (S.axes.estimators.indexOf(e) >= 0 ? "checked" : "") + "> " + ESTIMATOR_LABEL[e];
+    l.querySelector("input").addEventListener("change", function (ev) {
+      var v = ev.target.value; if (ev.target.checked) { if (S.axes.estimators.indexOf(v) < 0) S.axes.estimators.push(v); } else S.axes.estimators = S.axes.estimators.filter(function (x) { return x !== v; });
+      updateComboCount();
+    });
+    ec.appendChild(l);
+  });
+  var cc = $("axisControls"); cc.innerHTML = "";
+  ["experience", "hours", "industry", "region", "health", "race"].forEach(function (c) {
+    var l = document.createElement("label"); l.className = "opt";
+    l.innerHTML = "<input type='checkbox' value='" + c + "' " + (S.axes.controlsVary.indexOf(c) >= 0 ? "checked" : "") + "> " + CONTROL_LABEL[c];
+    l.querySelector("input").addEventListener("change", function (ev) {
+      var v = ev.target.value; if (ev.target.checked) { if (S.axes.controlsVary.indexOf(v) < 0) S.axes.controlsVary.push(v); } else S.axes.controlsVary = S.axes.controlsVary.filter(function (x) { return x !== v; });
+      updateComboCount();
+    });
+    cc.appendChild(l);
   });
 }
-
-function bindCheck(id, key) {
-  var el = document.getElementById(id);
-  el.checked = S[key];
-  el.addEventListener("change", function(e) {
-    S[key] = !!e.target.checked;
-    computeAndRender();
+function buildSSControls() {
+  var box = $("ssControls"); box.innerHTML = "";
+  ["experience", "hours", "industry", "region", "health", "race"].forEach(function (c) {
+    var l = document.createElement("label"); l.className = "opt";
+    l.innerHTML = "<input type='checkbox' value='" + c + "' " + (S.ss.controls[c] ? "checked" : "") + "> " + CONTROL_LABEL[c];
+    l.querySelector("input").addEventListener("change", function (ev) { S.ss.controls[ev.target.value] = ev.target.checked; renderSingle(); syncHash(); });
+    box.appendChild(l);
   });
 }
-
-function bindSelect(id, key) {
-  var el = document.getElementById(id);
-  el.value = S[key];
-  el.addEventListener("change", function(e) {
-    S[key] = String(e.target.value);
-    computeAndRender();
-  });
-}
+function updateComboCount() { $("comboCount").innerHTML = (S.multiResults ? "Re-build to apply: " : "") + comboCount() + " specifications" + (comboCount() > 1500 ? " ⚠ large" : ""); }
 
 function setViz(v) {
   S.viz = v;
-  ["viz-descr", "viz-estimates", "viz-diagnostics", "viz-learn"].forEach(id => {
-    document.getElementById(id).classList.remove("active");
-  });
-  if (v === "descr") document.getElementById("viz-descr").classList.add("active");
-  if (v === "est") document.getElementById("viz-estimates").classList.add("active");
-  if (v === "diag") document.getElementById("viz-diagnostics").classList.add("active");
-  if (v === "learn") document.getElementById("viz-learn").classList.add("active");
-  computeAndRender();
+  var map = { data: "dataArea", multi: "multiArea", single: "singleArea", export: "exportArea", learn: "learnArea" };
+  Object.keys(map).forEach(function (k) { $(map[k]).style.display = k === v ? "block" : "none"; });
+  ["data", "multi", "single", "export", "learn"].forEach(function (k) { $("viz-" + k).classList.toggle("active", k === v); });
+  // the research-question sidebar is irrelevant on Methodology; give that tab the full width
+  var full = (v === "learn");
+  $("sidebarCol").style.display = full ? "none" : "";
+  $("mainRow").style.gridTemplateColumns = full ? "1fr" : "";
+  if (v === "export") { renderSidebar(); renderExport(); }
+  else if (v !== "learn") renderAll();
+  else renderSidebar();
+  syncHash();
 }
 
-function markMD(which) {
-  ["md-cs", "md-pooled", "md-fe", "md-re"].forEach(id => {
-    document.getElementById(id).classList.remove("active");
-  });
-  document.getElementById("md-" + which).classList.add("active");
-  S.modelDetail = which;
-  var r = window._lastResults;
-  if (r) fillModelDetails(which, r.cs, r.pooledOLS, r.fe, r.re);
+function controlsSummary(spec) {
+  var on = Object.keys(spec.controls).filter(function (k) { return spec.controls[k] && !(k === "race" && spec.focal === "educ"); });
+  return on.length ? on.map(function (k) { return CONTROL_LABEL[k]; }).join(", ") : "no controls";
+}
+function escapeHtml(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+
+function renderExport() {
+  var spec = ssSpec(S.ss.estimator);
+  $("code-r").textContent = Exports.genR(spec);
+  $("code-stata").textContent = Exports.genStata(spec);
+  $("code-python").textContent = Exports.genPython(spec);
 }
 
-function markDG(which) {
-  ["dg-cs", "dg-pooled", "dg-fe", "dg-re"].forEach(id => {
-    document.getElementById(id).classList.remove("active");
-  });
-  document.getElementById("dg-" + which).classList.add("active");
-  S.diagModel = which;
-  computeAndRender();
+function buildLabReport() {
+  var spec = ssSpec(S.ss.estimator), sel = E.runSpec(DATA, spec, META), sum = S.multiSummary;
+  var table = sel.identified ? regressionTable(sel.model, S.focal) : "<p><em>This estimator does not identify the focal coefficient for the chosen options.</em></p>";
+  var curve = Exports.chartSVGString("chart-speccurve") || "<p><em>(Build the specification curve to include it here.)</em></p>";
+  var persons = Object.keys(byPerson(DATA)).length;
+  var html = "<!doctype html><html lang='en'><head><meta charset='utf-8'><title>Panel Data Multiverse — Lab Report</title>" +
+    "<style>body{font-family:system-ui,-apple-system,sans-serif;max-width:880px;margin:2rem auto;padding:0 1rem;color:#111;line-height:1.55}" +
+    "table{border-collapse:collapse;width:100%;font-size:14px;margin:.5rem 0}th,td{border-bottom:1px solid #ddd;padding:6px 9px;text-align:left}" +
+    ".num{text-align:right;font-variant-numeric:tabular-nums}pre{background:#f5f5f5;padding:10px;border-radius:6px;overflow:auto;font-size:12px}" +
+    "h1{font-size:22px}h2{font-size:16px;margin-top:1.5rem;border-bottom:1px solid #eee;padding-bottom:4px}.muted{color:#666;font-size:12px}svg{max-width:100%;height:auto}</style></head><body>" +
+    "<h1>Panel Data Multiverse — Lab Report</h1>" +
+    "<p class='muted'>Generated " + new Date().toISOString().slice(0, 10) + " · NLSY wage panel: " + persons + " men, " + DATA.length + " person-years, 1980–1987.</p>" +
+    "<h2>Specification</h2><p>" + Exports.label(spec) + "<br>Outcome: " + outcomeLabel() + " · Controls: " + controlsSummary(spec) +
+    (spec.yearFE ? " · year fixed effects" : "") + " · Sample: " + SAMPLE_LABEL[spec.sample] + " · Standard errors: " + spec.seType + "</p>" +
+    "<h2>Regression results</h2>" + table +
+    (sum ? "<h2>Multiverse summary</h2><p>Across the most recent build: median estimate <strong>" + fmt(sum.median, 3) + "</strong>, range [" + fmt(sum.min, 3) + ", " + fmt(sum.max, 3) + "], " +
+      Math.round(sum.shareSig * 100) + "% statistically significant, " + Math.round(sum.shareFlip * 100) + "% sign flips, " + sum.unidentified + " not identifiable.</p>" +
+      "<h2>Specification curve</h2>" + curve : "") +
+    "<h2>Reproducible code (R · plm)</h2><pre>" + escapeHtml(Exports.genR(spec)) + "</pre>" +
+    "<hr><p class='muted'>Panel Data Multiverse Lab · estimates verified against R’s plm and Python’s linearmodels.</p></body></html>";
+  Exports.download("panel-multiverse-report.html", html, "text/html");
 }
 
 function bindUI() {
-  // Tab navigation
-  document.getElementById("viz-descr").addEventListener("click", () => setViz("descr"));
-  document.getElementById("viz-estimates").addEventListener("click", () => setViz("est"));
-  document.getElementById("viz-diagnostics").addEventListener("click", () => setViz("diag"));
-  document.getElementById("viz-learn").addEventListener("click", () => setViz("learn"));
-
-  // Parameter sliders
-  bindRange("N", "N");
-  bindRange("T", "T");
-  bindRange("betaTrue", "betaTrue");
-  bindRange("sigmaB", "sigmaB");
-  bindRange("nGroups", "nGroups");
-  bindRange("groupDeltaBeta", "groupDeltaBeta");
-  bindRange("sigmaU", "sigmaU");
-  bindRange("sigmaE", "sigmaE");
-  bindRange("sigmaME", "sigmaME");
-  bindRange("pBase", "pBase");
-  bindRange("rhoSel", "rhoSel");
-  bindRange("switchRate", "switchRate");
-  bindRange("timeTrendSlope", "timeTrendSlope");
-  bindCheck("timeTrendOn", "timeTrendOn");
-  bindRange("scatterWave", "scatterWave");
-  bindRange("spaghettiN", "spaghettiN");
-  bindCheck("colorByGroup", "colorByGroup");
-  bindSelect("seType", "seType");
-  bindCheck("specTrend", "specTrend");
-  bindCheck("specQuad", "specQuad");
-  bindCheck("specGroupFE", "specGroupFE");
-  bindSelect("groupEstimator", "groupEstimator");
-
-  // Presets
-  document.getElementById("preset-baseline").addEventListener("click", () => applyPreset("Baseline (No Bias)"));
-  document.getElementById("preset-selection").addEventListener("click", () => applyPreset("Selection Bias"));
-  document.getElementById("preset-rct").addEventListener("click", () => applyPreset("RCT-like"));
-  document.getElementById("preset-noisy").addEventListener("click", () => applyPreset("Noisy Survey"));
-  document.getElementById("preset-trend").addEventListener("click", () => applyPreset("Time Trend"));
-  document.getElementById("preset-lowvar").addEventListener("click", () => applyPreset("Low Within Variation"));
-
-  // New sample
-  document.getElementById("btn-newsample").addEventListener("click", function() {
-    S.seed = Math.floor(Math.random() * 100000);
-    computeAndRender();
+  ["data", "multi", "single", "export", "learn"].forEach(function (k) { $("viz-" + k).addEventListener("click", function () { setViz(k); }); });
+  // export tab: copy + download buttons
+  Array.prototype.forEach.call(document.querySelectorAll("[data-copy]"), function (b) {
+    b.addEventListener("click", function () { var t = $(b.getAttribute("data-copy")).textContent; navigator.clipboard.writeText(t).then(function () { var o = b.textContent; b.textContent = "Copied ✓"; setTimeout(function () { b.textContent = o; }, 1200); }); });
   });
-
-  // Download CSV
-  document.getElementById("btn-download").addEventListener("click", function() {
-    var sim = simulate();
-    var header = ["pid", "gid", "beta_i", "wave", "D", "u", "e", "yStar", "y", "trend"];
-    function esc(s) { return '"' + String(s).replace(/"/g, '""') + '"'; }
-    var csv = [header.join(",")].concat(
-      sim.map(r => header.map(h => esc(r[h])).join(","))
-    ).join("\n");
-    var blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement("a");
-    a.href = url;
-    a.download = "panel_simulation.csv";
-    a.click();
-    URL.revokeObjectURL(url);
+  $("dl-multiverse-csv").addEventListener("click", function () {
+    if (!S.multiResults) { alert("Build the multiverse first (Specification Curve tab)."); return; }
+    Exports.download("multiverse_" + S.focal + "_" + outcomeKey() + ".csv", Exports.multiverseCSV(S.multiResults), "text/csv");
   });
-
-  // Model detail chips
-  document.getElementById("md-cs").addEventListener("click", () => markMD("cs"));
-  document.getElementById("md-pooled").addEventListener("click", () => markMD("pooled"));
-  document.getElementById("md-fe").addEventListener("click", () => markMD("fe"));
-  document.getElementById("md-re").addEventListener("click", () => markMD("re"));
-
-  // Diagnostic model chips
-  document.getElementById("dg-cs").addEventListener("click", () => markDG("cs"));
-  document.getElementById("dg-pooled").addEventListener("click", () => markDG("pooled"));
-  document.getElementById("dg-fe").addEventListener("click", () => markDG("fe"));
-  document.getElementById("dg-re").addEventListener("click", () => markDG("re"));
-
-  // Collapsible sections
-  document.querySelectorAll(".collapsible").forEach(el => {
-    el.addEventListener("click", function() {
-      this.classList.toggle("open");
-      var contentId = this.id.replace("coll-", "content-");
-      document.getElementById(contentId).classList.toggle("show");
+  $("dl-curve-svg").addEventListener("click", function () { if (!document.querySelector("#chart-speccurve svg")) { alert("Build the specification curve first."); return; } Exports.exportSVG("chart-speccurve", "spec-curve-" + S.focal + ".svg"); });
+  $("dl-curve-png").addEventListener("click", function () { if (!document.querySelector("#chart-speccurve svg")) { alert("Build the specification curve first."); return; } Exports.exportPNG("chart-speccurve", "spec-curve-" + S.focal + ".png", 2); });
+  $("dl-report").addEventListener("click", buildLabReport);
+  Array.prototype.forEach.call(document.getElementsByName("focal"), function (el) { el.addEventListener("change", function (e) { if (e.target.checked) setFocal(e.target.value); }); });
+  $("outcome").addEventListener("change", function (e) { S.outcome = e.target.value; S.multiResults = null; renderAll(); syncHash(); });
+  $("seType").addEventListener("change", function (e) { S.seType = e.target.value; S.multiResults = null; renderAll(); syncHash(); });
+  $("btn-share").addEventListener("click", function () {
+    var url = location.origin + location.pathname + stateToHash(); var b = this;
+    navigator.clipboard.writeText(url).then(function () { var o = b.textContent; b.textContent = "🔗 Link copied ✓"; setTimeout(function () { b.textContent = o; }, 1500); });
+  });
+  // click anywhere on a chart (or its ⤢ button) to enlarge; close on backdrop, ✕, or Esc
+  document.addEventListener("click", function (e) { var ch = e.target.closest ? e.target.closest(".chart") : null; if (ch && ch.id && ch.querySelector("svg")) openFig(ch.id); });
+  $("figClose").addEventListener("click", closeFig);
+  $("figModal").addEventListener("click", function (e) { if (e.target === $("figModal")) closeFig(); });
+  document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeFig(); });
+  $("btn-lesson").addEventListener("click", function () { showLesson(0); });
+  $("lessonNext").addEventListener("click", function () { showLesson(S.lessonStep + 1); });
+  $("lessonPrev").addEventListener("click", function () { showLesson(S.lessonStep - 1); });
+  $("lessonClose").addEventListener("click", closeLesson);
+  $("axisYearFE").addEventListener("change", function (e) { S.axes.yearFEVary = e.target.checked; updateComboCount(); });
+  Array.prototype.forEach.call(document.getElementsByClassName("axisSample"), function (el) {
+    el.addEventListener("change", function () {
+      S.axes.sampleVary = Array.prototype.filter.call(document.getElementsByClassName("axisSample"), function (x) { return x.checked; }).map(function (x) { return x.value; });
+      if (!S.axes.sampleVary.length) { el.checked = true; S.axes.sampleVary = [el.value]; }
+      updateComboCount();
     });
+  });
+  $("btn-runmulti").addEventListener("click", runMultiverse);
+  $("showEq").addEventListener("change", function () { renderEquation(ssSpec(S.ss.estimator), E.runSpec(DATA, ssSpec(S.ss.estimator), META).model, S.ss.estimator); });
+  $("btn-bootstrap").addEventListener("click", function () {
+    var btn = this, lab = btn.textContent; btn.disabled = true; btn.textContent = "Bootstrapping… (B=500)";
+    var box = $("bootstrapResult"); box.className = "alert alert-info mt-2"; box.textContent = "Resampling 545 persons with replacement, 500 times…";
+    setTimeout(function () {
+      var r = E.bootstrapFocal(DATA, ssSpec(S.ss.estimator), META, 500);
+      var pt = E.runSpec(DATA, ssSpec(S.ss.estimator), META);
+      if (r.B > 0) {
+        box.className = "alert alert-success mt-2";
+        box.innerHTML = "<strong>Cluster bootstrap — " + ESTIMATOR_LABEL[S.ss.estimator] + ", " + FOCAL_SHORT[S.focal] + "</strong><br>point estimate <strong>" + fmt(pt.b, 3) + "</strong> · 95% bootstrap CI <strong>[" + fmt(r.lo, 3) + ", " + fmt(r.hi, 3) + "]</strong> · bootstrap SE " + fmt(r.se, 3) + "<br><span class='help-text'>From " + r.B + " draws that resample whole persons (preserving within-person correlation). No distributional assumption.</span>";
+      } else { box.className = "alert alert-warning mt-2"; box.textContent = "Not identified for this estimator/spec."; }
+      btn.disabled = false; btn.textContent = lab;
+    }, 30);
+  });
+  $("btn-inference").addEventListener("click", function () {
+    var btn = this, lab = btn.textContent; btn.disabled = true; btn.textContent = "Running…";
+    var axes = buildAxes(), obs = E.curveStats(E.enumerateMultiverse(DATA, axes, META));
+    var B = 100, medGE = 0, sigGE = 0, b = 0;
+    var box = $("inferenceBox"); box.style.display = "block"; box.className = "alert alert-info";
+    setViz("multi"); box.style.display = "block"; // ensure visible on the multiverse tab
+    function render(done) {
+      var pMed = (medGE + 1) / (b + 1), pSig = (sigGE + 1) / (b + 1);
+      box.innerHTML = "<strong>🎲 Randomization inference on the whole curve</strong>" +
+        "<div class='progress-bar'><div class='progress-bar-fill' style='width:" + Math.round(100 * b / B) + "%'></div></div>" +
+        (done ? "" : "Permuting the focal variable under “no effect” and rebuilding the curve… " + b + " / " + B + " draws") +
+        (done ? ("Observed curve: median estimate <strong>" + fmt(obs.median, 3) + "</strong>, " + obs.nSigDom + " of " + obs.n + " specifications significant in the dominant direction.<br>" +
+          "p(|median| ≥ observed) = <strong>" + pMed.toFixed(3) + "</strong> &nbsp;·&nbsp; p(# significant ≥ observed) = <strong>" + pSig.toFixed(3) + "</strong><br>" +
+          "<span class='help-text'>" + (Math.min(pMed, pSig) < 0.05 ? "The observed curve is hard to reconcile with “the focal variable has no effect.”" : "The curve is not clearly distinguishable from what “no effect” would produce.") + "</span>") : "");
+      box.className = "alert " + (done ? (Math.min(pMed, pSig) < 0.05 ? "alert-success" : "alert-warning") : "alert-info");
+    }
+    function step() {
+      var chunk = Math.min(4, B - b);
+      for (var c = 0; c < chunk; c++) { var s = E.nullReplication(DATA, axes, META); if (Math.abs(s.median) >= Math.abs(obs.median)) medGE++; if (s.nSigDom >= obs.nSigDom) sigGE++; b++; }
+      render(b >= B);
+      if (b < B) setTimeout(step, 0); else { btn.disabled = false; btn.textContent = lab; box.scrollIntoView({ behavior: "smooth", block: "center" }); }
+    }
+    render(false); setTimeout(step, 20);
+  });
+  $("ssEstimator").addEventListener("change", function (e) { S.ss.estimator = e.target.value; renderSingle(); syncHash(); });
+  $("ssYearFE").addEventListener("change", function (e) { S.ss.yearFE = e.target.checked; renderSingle(); syncHash(); });
+  $("ssSample").addEventListener("change", function (e) { S.ss.sample = e.target.value; renderSingle(); syncHash(); });
+  Array.prototype.forEach.call(document.getElementsByClassName("collapsible"), function (el) {
+    el.addEventListener("click", function () { el.classList.toggle("open"); var c = el.nextElementSibling; if (c) c.classList.toggle("show"); });
   });
 }
 
+// ============== INIT ==============
 function init() {
-  syncInputs();
-  bindUI();
-  computeAndRender();
-}
-
-(function(root) {
-  try {
-    root.StatsLab = Object.assign(root.StatsLab || {}, {
-      ols,
-      feWithin,
-      randomEffects,
-      hausmanTest,
-      coefAt,
-      coefIndex,
-      ci,
-      pnorm,
-      pchisq,
-      matInverse,
-      matMul,
-      matTranspose,
-      matVecMul
-    });
-  } catch (_) {
-    // no-op
+  // guard against a stale cached engine.js running with a newer app.js
+  if (!E || typeof E.curveStats !== "function" || !E.ESTIMATORS_ALL) {
+    $("loading").innerHTML = "<div class='alert alert-warning'>An older cached version of the app is loaded. Please hard-refresh this page (⌘⇧R / Ctrl-Shift-R) to update. If it persists, empty the cache and reload, or open in a private window.</div>";
+    return;
   }
-})(typeof globalThis !== "undefined" ? globalThis : this);
-
-if (typeof window !== "undefined" && window.addEventListener) {
-  window.addEventListener("DOMContentLoaded", init);
+  fetch("data/wagepan.json").then(function (r) { return r.json(); }).then(function (rows) {
+    DATA = rows; META = computeMeta(rows);
+    $("loading").style.display = "none"; $("appBody").style.display = "block";
+    applyHash();
+    buildAxisControls(); buildSSControls(); bindUI();
+    syncDom(); updateComboCount();
+    setViz(S.viz || "data");
+    $("statusBar").innerHTML = "Loaded " + DATA.length + " person-years · estimators verified against R’s plm and Python’s linearmodels (see Methodology → Verification).";
+  }).catch(function (err) {
+    $("loading").innerHTML = "<div class='alert alert-warning'>Could not load data/wagepan.json — " + err + "</div>";
+  });
 }
+init();
