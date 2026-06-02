@@ -1,0 +1,79 @@
+name: verify
+# Enforces the canonical-numbers contract on every push and pull request.
+#
+# Fast lane (runs on every push): node verify.cjs (23/23 plm benchmarks) and a
+# headless re-export of the full multiverse (verifies that the engine still
+# runs end-to-end against bundled data).
+#
+# Slow lane (scheduled weekly): the R + Python replications, which install
+# heavy dependencies (plm, linearmodels, car, relaimpo). They protect against
+# upstream-package drift but are too slow to gate every commit.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 4 * * 1"   # 04:00 UTC every Monday → triggers the slow lane
+  workflow_dispatch: {}
+
+jobs:
+  engine-self-test:
+    name: Engine self-test + headless multiverse export
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: verify.cjs (23 canonical plm benchmarks)
+        run: node verify.cjs
+      - name: Headless multiverse export (1,440 specifications)
+        run: node tools/export_multiverse.cjs
+      - name: Confirm CSV artefacts are non-empty
+        run: |
+          test -s verification/js_multiverse.csv
+          test -s figures/multiverse_union.csv
+          echo "rows in js_multiverse.csv: $(wc -l < verification/js_multiverse.csv)"
+          echo "rows in multiverse_union.csv: $(wc -l < figures/multiverse_union.csv)"
+
+  replicate-r:
+    name: R (plm) replication
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: '4.4.1'
+      - name: Install R packages
+        run: |
+          Rscript -e 'install.packages(c("wooldridge","plm","readr","car","relaimpo"), repos="https://cloud.r-project.org")'
+      - name: Generate the multiverse CSV (input to replicate_plm.R)
+        run: node tools/export_multiverse.cjs
+      - name: R replication of all 1,440 specifications
+        run: Rscript verification/replicate_plm.R
+
+  replicate-python:
+    name: Python (linearmodels) replication
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Python packages
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Generate the multiverse CSV (input to replicate_python.py)
+        run: node tools/export_multiverse.cjs
+      - name: Python replication of all 1,440 specifications
+        run: python verification/replicate_python.py

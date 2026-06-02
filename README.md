@@ -1,0 +1,184 @@
+# Panel Data Multiverse Lab
+
+A free, open-source, browser-based tool that enumerates the full specification
+curve of a panel-data estimand across the analytic-choice space, and the
+companion methods-note that uses it to argue that the choice of estimator is
+the dominant axis of analytic flexibility in panel-data work.
+
+**Live application:** <https://kevinschoenholzer.com/sim-paneldata/>
+**Paper:** [`paper.md`](paper.md) → [`paper.pdf`](paper.pdf)
+**Verification:** R (`plm`) and Python (`linearmodels`) reproduce all 1,440
+specifications independently — see [`verification/`](verification/).
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Cite](https://img.shields.io/badge/cite-CITATION.cff-blue)](CITATION.cff)
+[![Status](https://img.shields.io/badge/status-pre--submission-yellow)](paper.md)
+
+---
+
+## What this is
+
+The application is a single static page (`index.html` + `engine.js` + `app.js` +
+`exports.js`) with no build step and no server. Open it in a browser and pick
+a focal effect (the union or marriage wage premium, or the return to
+schooling); the engine evaluates the full multiverse implied by reasonable
+choices of estimator (pooled OLS, between, random effects, fixed effects,
+first differences, plus correlated random effects and two-way fixed effects
+available as interactive sensitivity checks), control set, sample definition,
+year effects and inference family, and renders the resulting specification
+curve, an estimator-by-estimator spectrum view, a single-spec deep-dive with
+diagnostics, runnable R / Stata / Python code for any specification, and a
+shareable permalink that round-trips the full app state through the URL hash.
+
+The companion paper enumerates the full curve for three classical estimands
+and decomposes the resulting estimate distribution by analytic dimension.
+Estimator choice alone accounts for 84.6% of the variance of the union
+premium and 56.2% of the marriage premium (Type-I sequential SS; the LMG /
+Shapley decomposition recovers the same ranking and order-insensitive
+Type-III shares confirm dominance); covariates and sample together account
+for under 7%. The return to schooling is unidentifiable under every within
+estimator. The conclusion is methodological: a multiverse exercise that
+varies only controls explores a sharply narrower slice of the analytic space
+than the full curve does, and panel multiverse analyses should therefore
+treat the estimator — the choice of identifying assumption — as a first-class
+forking path.
+
+## Quickstart (use the live app)
+
+1. Open <https://kevinschoenholzer.com/sim-paneldata/>.
+2. Pick a focal effect in the left sidebar.
+3. Open **Specification Curve** → click **Build the multiverse →**.
+4. (Optional) Click **Test the whole curve** to run a cluster-level
+   randomization test under the sharp null; set the reproducibility seed in
+   the sidebar to make results bit-identical across reloads.
+5. Open **Export & Code** to copy a runnable R / Stata / Python snippet for
+   any single specification, download the multiverse CSV, or generate an HTML
+   lab report.
+
+## Reproducing the paper
+
+Run the following in order, from the repository root. Each step is
+idempotent and self-contained. Required software versions are listed below.
+
+```bash
+# 0. Prerequisites: Node ≥ 22, R ≥ 4.4, Python ≥ 3.11, pandoc + xelatex.
+
+# 1. Regenerate the bundled data extract (writes data/wagepan.json).
+Rscript data-prep.R
+
+# 2. Engine self-test against canonical plm benchmarks (23/23 must pass).
+node verify.cjs
+
+# 3. Headless export of the full multiverse to CSV (drives the engine in
+#    Node; writes verification/js_multiverse.csv and figures/multiverse_union.csv).
+node tools/export_multiverse.cjs
+
+# 4. Independent re-fit in R: re-runs all 1,440 specifications via plm and
+#    compares against the JS engine (writes verification/replication_report.md).
+Rscript verification/replicate_plm.R
+
+# 5. Independent re-fit in Python via linearmodels (writes
+#    verification/replication_report_python.md).
+python3 verification/replicate_python.py
+
+# 6. Variance decomposition that produces Table 1 of the paper (Type-I,
+#    Type-III, LMG/Shapley, and the controls-only-vs-full multiverse contrast).
+Rscript analysis/variance_decomp.R
+
+# 7. Figures 1 and 2.
+Rscript figures/make_figure.R     # spec curve (Figure 2)
+Rscript figures/make_figure2.R    # estimator spectrum (Figure 1)
+
+# 8. Render the paper.
+pandoc paper.md --citeproc --bibliography=paper.bib --pdf-engine=xelatex \
+  -V geometry:margin=1in -V fontsize=11pt \
+  -V linkcolor=blue -V colorlinks=true \
+  -o paper.pdf
+```
+
+## Software requirements
+
+The verification chain is pinned. Versions used in the paper's reported
+numbers are recorded in:
+
+- [`requirements.txt`](requirements.txt) — Python package versions
+- [`verification/sessionInfo.txt`](verification/sessionInfo.txt) — R package
+  versions (generated by `Rscript -e 'sessionInfo()'`)
+- The browser application has no runtime dependencies; the JavaScript engine
+  is dependency-free and runs in any modern browser.
+
+| Component | Version used |
+|---|---|
+| Node.js | 22.x or newer |
+| R | 4.4 or newer; CRAN packages `wooldridge`, `plm`, `lmtest`, `sandwich`, `car`, `relaimpo`, `readr`, `ggplot2`, `patchwork` |
+| Python | 3.11 or newer; PyPI `linearmodels==7.0`, `pandas`, `numpy` |
+| pandoc + xelatex | for rendering the PDF |
+
+## Repository structure
+
+```
+panel-multiverse-lab/
+├── index.html              ─ the live application
+├── engine.js               ─ numeric core (estimators, inference, verification)
+├── app.js                  ─ UI / charts / wiring
+├── exports.js              ─ R / Stata / Python code generator and HTML report
+├── data/wagepan.json       ─ bundled NLSY wage-panel extract (from wooldridge)
+├── data-prep.R             ─ regenerates data/wagepan.json from the source package
+├── tools/
+│   └── export_multiverse.cjs   ─ headless Node export of js_multiverse.csv
+├── verify.cjs              ─ engine self-test against canonical plm benchmarks
+├── verification/
+│   ├── README.md
+│   ├── js_multiverse.csv           (generated)
+│   ├── replicate_plm.R             ─ R re-fit of every spec via plm
+│   ├── replicate_python.py         ─ Python re-fit via linearmodels
+│   ├── replication_report.md       (generated)
+│   └── replication_report_python.md (generated)
+├── analysis/
+│   └── variance_decomp.R       ─ Table 1 (Type-I, Type-III, LMG, Residual)
+├── figures/
+│   ├── make_figure.R           ─ Figure 2 (specification curve)
+│   ├── make_figure2.R          ─ Figure 1 (estimator spectrum)
+│   └── *.png                   (generated)
+├── paper.md                ─ the methods note
+├── paper.bib               ─ bibliography
+├── paper.pdf               (generated)
+├── REVIEW_REPORT.md        ─ pre-submission review notes
+├── CITATION.cff
+├── LICENSE                 ─ MIT
+└── README.md               (this file)
+```
+
+## Verification
+
+The numerical core is verified at three independent levels:
+
+1. **Engine self-test** (`node verify.cjs`): 23 canonical `plm` benchmarks
+   covering pooled / between / random / within / FD coefficients and SEs,
+   the full Hausman joint statistic, the Mundlak CRE ≡ FE equivalence, the
+   two-way fixed effects ≡ within + year FE equivalence, and the
+   non-identification of time-invariant regressors under within estimators.
+2. **R replication** via `plm` of all 1,440 specifications
+   (`Rscript verification/replicate_plm.R`): pooled, between, fixed-effects
+   and first-difference coefficients agree to better than 1 × 10⁻⁶; random
+   effects to 3 × 10⁻⁴ (Swamy–Arora variance components differ in higher
+   decimal places).
+3. **Python replication** via `linearmodels` of the same 1,440
+   specifications (`python3 verification/replicate_python.py`): coefficients
+   agree to better than 5 × 10⁻⁷.
+
+The continuous-integration workflow [`.github/workflows/verify.yml`](.github/workflows/verify.yml)
+runs the engine self-test on every push so the canonical-numbers contract is
+enforced automatically.
+
+## Cite
+
+If you use this software or the methods note in your work, please cite using
+the metadata in [`CITATION.cff`](CITATION.cff). Once the archived release
+is deposited on Zenodo, cite the DOI listed there.
+
+## License
+
+[MIT](LICENSE). The bundled `wagepan` data extract originates with
+[Vella & Verbeek (1998)](https://doi.org/10.1002/(SICI)1099-1255(199803/04)13:2%3C163::AID-JAE460%3E3.0.CO;2-Y),
+redistributed openly via the `wooldridge` and `plm` R packages.

@@ -31,6 +31,19 @@
     if (lo === hi) return s[lo];
     return s[lo] * (hi - p) + s[hi] * (p - lo);
   }
+  // mulberry32 — small, deterministic, seedable PRNG used by the cluster bootstrap
+  // and the cluster-level permutation test so that p-values and bootstrap CIs are
+  // bit-reproducible from a published seed.
+  function mulberry32(seed) {
+    var a = (seed | 0) >>> 0;
+    return function () {
+      a = (a + 0x6d2b79f5) >>> 0;
+      var t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
   function pnorm(z) {
     var t = 1 / (1 + 0.2316419 * Math.abs(z));
     var d = 0.3989423 * Math.exp(-z * z / 2);
@@ -419,15 +432,19 @@
 
   // ---------- cluster (block) bootstrap of the focal coefficient ----------
   // Resamples persons with replacement; each draw is a fresh cluster so blocks stay distinct.
-  function bootstrapFocal(allRows, spec, meta, B) {
+  // opts.rng: optional () => Number in [0,1) — when provided (e.g. seeded mulberry32),
+  // the bootstrap is bit-reproducible; defaults to Math.random for backwards compatibility.
+  function bootstrapFocal(allRows, spec, meta, B, opts) {
     B = B || 500;
+    opts = opts || {};
+    var rand = opts.rng || Math.random;
     var byId = {}, ids = [];
     allRows.forEach(function (r) { if (!byId[r.nr]) { byId[r.nr] = []; ids.push(r.nr); } byId[r.nr].push(r); });
     var draws = [];
     for (var b = 0; b < B; b++) {
       var samp = [];
       for (var i = 0; i < ids.length; i++) {
-        var id = ids[(Math.random() * ids.length) | 0], cl = "b" + i;
+        var id = ids[(rand() * ids.length) | 0], cl = "b" + i;
         byId[id].forEach(function (r) { var c = Object.assign({}, r); c.nr = cl; samp.push(c); });
       }
       var res = runSpec(samp, spec, meta);
@@ -446,22 +463,51 @@
     ok.forEach(function (r) { var lo = r.b - 1.96 * r.se, hi = r.b + 1.96 * r.se; var sig = lo > 0 || hi < 0; if (sig && (r.b >= 0 ? 1 : -1) === dom) nSig++; });
     return { median: med, nSigDom: nSig, n: ok.length, dom: dom };
   }
-  function permuteFocal(rows, focal) {
-    var vals = rows.map(function (r) { return r[focal]; });
-    for (var i = vals.length - 1; i > 0; i--) { var j = (Math.random() * (i + 1)) | 0, t = vals[i]; vals[i] = vals[j]; vals[j] = t; }
-    return rows.map(function (r, i) { var c = Object.assign({}, r); c[focal] = vals[i]; return c; });
+  // Cluster-level (person-level) permutation of the focal regressor under the sharp null.
+  // We assemble each person's focal sequence (ordered by year for determinism), shuffle the
+  // mapping of persons to those sequences, then write each donor's sequence into the recipient's
+  // rows in the recipient's year order. This preserves within-person dependence (autocorrelation
+  // of the treatment trajectory) — the principled null for panel data, rather than a flat
+  // row-level permutation which would destroy that structure.
+  // opts.rng: optional seeded PRNG; defaults to Math.random.
+  function permuteFocal(rows, focal, opts) {
+    opts = opts || {};
+    var rand = opts.rng || Math.random;
+    var grp = groupIndex(rows.map(function (r) { return r.nr; }));
+    var nPersons = grp.order.length;
+    // sort each person's row indices by year, so seq positions align across donors/recipients
+    var personOrder = grp.order.map(function (id) {
+      return grp.by[id].slice().sort(function (a, b) {
+        return (rows[a].year || 0) - (rows[b].year || 0);
+      });
+    });
+    var personSeq = personOrder.map(function (idxs) {
+      return idxs.map(function (i) { return rows[i][focal]; });
+    });
+    // Fisher-Yates over person indices (seeded if opts.rng provided)
+    var perm = new Array(nPersons); for (var k = 0; k < nPersons; k++) perm[k] = k;
+    for (var i = nPersons - 1; i > 0; i--) {
+      var j = (rand() * (i + 1)) | 0, t = perm[i]; perm[i] = perm[j]; perm[j] = t;
+    }
+    // write donor's k-th value into recipient's k-th row (modulo length for unbalanced panels)
+    var newVals = new Array(rows.length);
+    for (var r = 0; r < nPersons; r++) {
+      var rIdx = personOrder[r], donor = personSeq[perm[r]];
+      for (var p = 0; p < rIdx.length; p++) newVals[rIdx[p]] = donor[p % donor.length];
+    }
+    return rows.map(function (row, i) { var c = Object.assign({}, row); c[focal] = newVals[i]; return c; });
   }
-  // one randomization replication under the sharp null (focal permuted across observations)
-  function nullReplication(allRows, axes, meta) {
-    return curveStats(enumerateMultiverse(permuteFocal(allRows, axes.focal), axes, meta));
+  // one randomization replication under the sharp null (focal permuted at the person level)
+  function nullReplication(allRows, axes, meta, opts) {
+    return curveStats(enumerateMultiverse(permuteFocal(allRows, axes.focal, opts), axes, meta));
   }
   // synchronous full test (used in Node tests; the UI runs nullReplication in chunks for responsiveness)
-  function specCurveInference(allRows, axes, meta, B) {
+  function specCurveInference(allRows, axes, meta, B, opts) {
     B = B || 200;
     var obs = curveStats(enumerateMultiverse(allRows, axes, meta));
     var medAbs = 0, sigGe = 0;
     for (var b = 0; b < B; b++) {
-      var s = nullReplication(allRows, axes, meta);
+      var s = nullReplication(allRows, axes, meta, opts);
       if (Math.abs(s.median) >= Math.abs(obs.median)) medAbs++;
       if (s.nSigDom >= obs.nSigDom) sigGe++;
     }
@@ -485,7 +531,7 @@
   }
 
   return {
-    mean: mean, variance: variance, quantile: quantile, pnorm: pnorm, pchisq: pchisq,
+    mean: mean, variance: variance, quantile: quantile, pnorm: pnorm, pchisq: pchisq, mulberry32: mulberry32,
     ols: ols, feWithin: feWithin, between: between, randomEffects: randomEffects,
     firstDifferences: firstDifferences, hausman: hausman, hausmanFull: hausmanFull, coefAt: coefAt,
     groupMeans: groupMeans, bootstrapFocal: bootstrapFocal,

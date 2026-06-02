@@ -51,11 +51,77 @@ function check(label, got, want, tol) {
   });
 });
 
-// Hausman (union + exper + expersq)
-const mk = est => E.runSpec(rows, { focal: "union", outcome: "lwage", controls: baseControls, yearFE: false, sample: "full", estimator: est, seType: "classical" }, meta).model;
-const h = E.hausman(mk("within"), mk("random"), "union");
-console.log(`\n=== Hausman (union spec) ===`);
-console.log(`  H=${h.stat.toFixed(2)} p=${h.pval.toExponential(2)} (plm: H=139.94 over 3 df; expect strong rejection on the union coef)`);
+// ---------- additional canonical-numbers tests ----------
+// These benchmarks cover the parts of the engine that the original 23 tests left
+// unexercised: the Mundlak equivalence (CRE focal coefficient = FE focal
+// coefficient), two-way fixed effects (against plm effect="twoways"), HC1 and
+// cluster-robust (CR1) standard errors (against sandwich::vcovHC), and the
+// joint Hausman statistic (against plm::phtest).
+function checkPass(label, cond, detail) {
+  console.log(`${cond ? "  ok  " : " FAIL "} ${label}${detail ? "  — " + detail : ""}`);
+  cond ? pass++ : fail++;
+}
+
+const specBase = (focal, est, seType, yearFE) => ({
+  focal, outcome: "lwage", controls: baseControls,
+  yearFE: !!yearFE, sample: "full", estimator: est,
+  seType: seType || "classical"
+});
+
+console.log("\n=== Mundlak equivalence: CRE focal coefficient == FE focal coefficient ===");
+for (const focal of ["union", "married"]) {
+  const fe  = E.runSpec(rows, specBase(focal, "within"), meta);
+  const cre = E.runSpec(rows, specBase(focal, "cre"),    meta);
+  const diff = Math.abs(fe.b - cre.b);
+  checkPass(
+    `${focal} CRE = FE`,
+    diff < 1e-4,
+    `FE=${fe.b.toFixed(5)}  CRE=${cre.b.toFixed(5)}  |Δ|=${diff.toExponential(2)}`
+  );
+}
+
+console.log("\n=== Two-way FE (entity + time): plm effect=\"twoways\" ===");
+const twfe   = E.runSpec(rows, specBase("union", "twfe"),   meta);
+const wYearFE = E.runSpec(rows, specBase("union", "within", "classical", true), meta);
+// plm two-way FE union = 0.08130
+check("TWFE union beta vs plm canonical", twfe.b, 0.08130, 0.0015);
+checkPass(
+  "TWFE = within + yearFE (engine self-equivalence)",
+  Math.abs(twfe.b - wYearFE.b) < 1e-9,
+  `TWFE=${twfe.b.toFixed(6)}  within+yearFE=${wYearFE.b.toFixed(6)}`
+);
+
+console.log("\n=== Heteroskedasticity-robust (HC1) and cluster-robust (CR1) SEs ===");
+// Canonical values from R's sandwich package on the matching base-lm model
+// (lm(lwage ~ union + exper + expersq) with sandwich::vcovHC(type='HC1') and
+// sandwich::vcovCL(cluster=~nr, type='HC1')). Engine matches sandwich to 1e-5
+// on pooled OLS.
+const pooledHC1 = E.runSpec(rows, specBase("union", "pooled", "robust"), meta);
+check("pooled union HC1 SE  (vs sandwich::vcovHC)",  pooledHC1.se, 0.01697, 0.0001);
+const pooledCR1 = E.runSpec(rows, specBase("union", "pooled", "cluster"), meta);
+check("pooled union CR1 SE  (vs sandwich::vcovCL)",  pooledCR1.se, 0.02997, 0.0001);
+// Within-transformed regressions: the engine uses the Stata xtreg cluster
+// small-sample correction (df = N(T-1) - k), while sandwich's vcovHC/vcovCL
+// applied to the demeaned regression uses the lm convention (df = n - k_slopes).
+// Both are defensible; we benchmark the engine's value with a documented
+// tolerance so the test fails only on a substantive change.
+const withinCR1 = E.runSpec(rows, specBase("union", "within", "cluster"), meta);
+check("within union CR1 SE  (engine Stata-xtreg convention)", withinCR1.se, 0.02455, 0.0010);
+
+console.log("\n=== Joint Hausman test (df = 3, against plm::phtest) ===");
+const mkClassical = (est) => E.runSpec(rows, specBase("union", est, "classical"), meta).model;
+const hjoint = E.hausmanFull(mkClassical("within"), mkClassical("random"));
+checkPass(
+  "Hausman df = 3",
+  hjoint.df === 3,
+  `df=${hjoint.df}`
+);
+check("Hausman chisq vs plm phtest", hjoint.stat, 139.94, 0.05);
+checkPass(
+  "Hausman p-value < 1e-20",
+  hjoint.pval < 1e-20,
+  `p = ${hjoint.pval.toExponential(2)}`
+);
 
 console.log(`\n${fail === 0 ? "ALL PASS" : "SOME FAILED"} — ${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

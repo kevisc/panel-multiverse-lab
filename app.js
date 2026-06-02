@@ -9,7 +9,7 @@ var S = {
   focal: "union", outcome: "lwage", seType: "cluster", viz: "data",
   ss: { estimator: "within", controls: { experience: true, hours: false, industry: false, region: false, health: false, race: false }, yearFE: false, sample: "full" },
   axes: { estimators: ["pooled", "between", "random", "within", "fd"], controlsVary: ["experience", "industry", "region", "health"], yearFEVary: true, sampleVary: ["full"] },
-  multiResults: null, multiSummary: null, lessonStep: -1
+  multiResults: null, multiSummary: null, lessonStep: -1, seed: 42
 };
 
 var FOCAL_LABEL = { union: "union wage premium", married: "marriage wage premium", educ: "return to schooling" };
@@ -54,15 +54,65 @@ function setChart(id, svg) {
   b.addEventListener("click", function (e) { e.stopPropagation(); openFig(id); });
   c.appendChild(b);
 }
+var _figPrevFocus = null;
 function openFig(id) {
   var c = $(id); if (!c) return; var svg = c.querySelector("svg"); if (!svg) return;
   var clone = svg.cloneNode(true);
-  $("figModalBody").innerHTML = ""; $("figModalBody").appendChild(clone);
+  var body = $("figModalBody");
+  body.innerHTML = ""; body.appendChild(clone);
+  // text/table alternative: for the rich spec-curve figure, include a screen-
+  // reader-accessible <details> summary of the underlying estimates so the
+  // figure has a structured non-visual fallback.
+  if (id === "chart-speccurve" && S.multiResults && S.multiResults.length) {
+    body.appendChild(buildSpecCurveTextAlt());
+  }
   $("figModalTitle").textContent = CHART_TITLES[id] || "Figure";
   $("figModalCap").textContent = c.getAttribute("aria-label") || "";
+  // focus management: remember whatever had focus, move it to the close
+  // button, and trap Tab inside the modal until it closes.
+  _figPrevFocus = document.activeElement;
   $("figModal").classList.add("open");
+  setTimeout(function () { try { $("figClose").focus(); } catch (e) {} }, 0);
 }
-function closeFig() { $("figModal").classList.remove("open"); $("figModalBody").innerHTML = ""; }
+function closeFig() {
+  $("figModal").classList.remove("open");
+  $("figModalBody").innerHTML = "";
+  if (_figPrevFocus && typeof _figPrevFocus.focus === "function") {
+    try { _figPrevFocus.focus(); } catch (e) {}
+  }
+  _figPrevFocus = null;
+}
+function buildSpecCurveTextAlt() {
+  var sum = S.multiSummary || {}, results = S.multiResults || [];
+  var ok = results.filter(function (r) { return r.identified && isFinite(r.b); }).slice().sort(function (a, b) { return a.b - b.b; });
+  var wrap = document.createElement("div"); wrap.className = "mt-3";
+  var d = document.createElement("details"); d.style.fontSize = "13px"; d.style.color = "#cbd5e1";
+  var s = document.createElement("summary"); s.textContent = "Tabular alternative: " + ok.length + " identified specifications, sorted by estimate"; s.style.cursor = "pointer"; d.appendChild(s);
+  var p = document.createElement("p"); p.className = "help-text"; p.style.marginTop = "8px";
+  p.textContent = "Median " + fmt(sum.median, 3) + ", range [" + fmt(sum.min, 3) + ", " + fmt(sum.max, 3) + "], interquartile range [" + fmt(sum.q25, 3) + ", " + fmt(sum.q75, 3) + "]; " + Math.round(sum.shareSig * 100) + "% statistically significant, " + Math.round(sum.shareFlip * 100) + "% sign-flipped, " + sum.unidentified + " not identifiable.";
+  d.appendChild(p);
+  var t = document.createElement("table"); t.className = "stat-table"; t.style.marginTop = "8px"; t.setAttribute("aria-label", "Sorted multiverse estimates");
+  t.innerHTML = "<thead><tr><th>#</th><th>Estimator</th><th class='num'>Estimate</th><th class='num'>95% CI</th></tr></thead>";
+  var tb = document.createElement("tbody");
+  ok.forEach(function (r, i) {
+    var lo = r.b - 1.96 * r.se, hi = r.b + 1.96 * r.se;
+    var tr = document.createElement("tr");
+    tr.innerHTML = "<td>" + (i + 1) + "</td><td>" + ESTIMATOR_LABEL[r.estimator] + "</td><td class='num'>" + fmt(r.b, 3) + "</td><td class='num'>[" + fmt(lo, 3) + ", " + fmt(hi, 3) + "]</td>";
+    tb.appendChild(tr);
+  });
+  t.appendChild(tb); d.appendChild(t); wrap.appendChild(d);
+  return wrap;
+}
+function trapFigModalFocus(e) {
+  if (e.key !== "Tab") return;
+  var modal = $("figModal"); if (!modal.classList.contains("open")) return;
+  var nodes = modal.querySelectorAll("button, [href], [tabindex]:not([tabindex='-1']), input, select, textarea, summary");
+  var focusable = Array.prototype.filter.call(nodes, function (n) { return !n.disabled && n.offsetWidth > 0; });
+  if (!focusable.length) return;
+  var first = focusable[0], last = focusable[focusable.length - 1];
+  if (e.shiftKey && document.activeElement === first) { last.focus(); e.preventDefault(); }
+  else if (!e.shiftKey && document.activeElement === last) { first.focus(); e.preventDefault(); }
+}
 function emptyChart(id, msg) { $(id).innerHTML = "<div style='padding:24px;color:#6b7280'>" + (msg || "No data") + "</div>"; }
 function ariaChart(id, label) { var c = $(id); if (c) c.setAttribute("aria-label", label); }
 
@@ -307,7 +357,7 @@ function renderMulti() {
 
 // ============== SINGLE SPEC ==============
 function ssSpec(estimator) {
-  return { focal: S.focal, outcome: S.outcome, controls: Object.assign({}, S.ss.controls), yearFE: S.ss.yearFE, sample: S.ss.sample, estimator: estimator, seType: S.seType };
+  return { focal: S.focal, outcome: S.outcome, controls: Object.assign({}, S.ss.controls), yearFE: S.ss.yearFE, sample: S.ss.sample, estimator: estimator, seType: S.seType, seed: S.seed };
 }
 function drawEstBars(items) {
   var w = 480, h = 300, m = { l: 50, r: 14, t: 16, b: 52 };
@@ -598,28 +648,94 @@ function showLesson(i) {
 function closeLesson() { S.lessonStep = -1; $("lessonBar").style.display = "none"; document.body.style.paddingBottom = ""; }
 
 // ============== SHAREABLE PERMALINKS ==============
+// ---------- shareable permalinks ----------
+// stateToHash encodes the FULL UI state so a copied link round-trips exactly:
+// the sidebar controls (focal, outcome, SE family, seed), the single-spec
+// controls (estimator, control toggles, year-FE, sample), the active tab,
+// AND the multiverse axes (which estimators / controls are varied, whether
+// year-FE and sample are varied, and the selected sample set).  applyHash
+// validates every field against a known allow-list before assigning to S.
+var ALLOWED_FOCALS    = ["union","married","educ"];
+var ALLOWED_OUTCOMES  = ["lwage","wage"];
+var ALLOWED_SETYPES   = ["classical","robust","cluster"];
+var ALLOWED_SAMPLES   = ["full","nohealth","trim"];
+var ALLOWED_VIZ       = ["data","multi","single","export","learn"];
+
 function stateToHash() {
-  var on = E.CONTROL_KEYS.concat(["race"]).filter(function (k) { return S.ss.controls[k]; });
-  var p = { focal: S.focal, outcome: S.outcome, se: S.seType, tab: S.viz, est: S.ss.estimator, ctrl: on.join(","), yfe: S.ss.yearFE ? 1 : 0, samp: S.ss.sample };
+  var ssCtrl = E.CONTROL_KEYS.concat(["race"]).filter(function (k) { return S.ss.controls[k]; });
+  var ax = S.axes;
+  var p = {
+    focal:   S.focal,
+    outcome: S.outcome,
+    se:      S.seType,
+    tab:     S.viz,
+    est:     S.ss.estimator,
+    ctrl:    ssCtrl.join(","),
+    yfe:     S.ss.yearFE ? 1 : 0,
+    samp:    S.ss.sample,
+    seed:    S.seed,
+    // multiverse axes
+    axEst:   (ax.estimators || []).join(","),
+    axCtrl:  (ax.controlsVary || []).join(","),
+    axYfeV:  ax.yearFEVary ? 1 : 0,
+    axSamp:  (ax.sampleVary || []).join(",")
+  };
   return "#" + Object.keys(p).map(function (k) { return k + "=" + encodeURIComponent(p[k]); }).join("&");
 }
 function syncHash() { try { history.replaceState(null, "", stateToHash()); } catch (e) {} }
+
+// strict allow-list filter for comma-separated list fields
+function filterAllowed(csv, allowed) {
+  if (csv == null || csv === "") return [];
+  var allow = {}; allowed.forEach(function (a) { allow[a] = true; });
+  return csv.split(",").filter(function (k) { return Object.prototype.hasOwnProperty.call(allow, k) && allow[k]; });
+}
+
 function applyHash() {
   var h = (location.hash || "").replace(/^#/, ""); if (!h) return;
-  var q = {}; h.split("&").forEach(function (s) { var kv = s.split("="); q[kv[0]] = decodeURIComponent(kv[1] || ""); });
-  if (q.focal && FOCAL_LABEL[q.focal]) S.focal = q.focal;
-  if (q.outcome === "wage" || q.outcome === "lwage") S.outcome = q.outcome;
-  if (["classical", "robust", "cluster"].indexOf(q.se) >= 0) S.seType = q.se;
+  var q = {};
+  h.split("&").forEach(function (s) { var kv = s.split("="); if (kv[0]) q[kv[0]] = decodeURIComponent(kv[1] || ""); });
+  // single-spec / sidebar state
+  if (ALLOWED_FOCALS.indexOf(q.focal) >= 0)   S.focal   = q.focal;
+  if (ALLOWED_OUTCOMES.indexOf(q.outcome) >= 0) S.outcome = q.outcome;
+  if (ALLOWED_SETYPES.indexOf(q.se) >= 0)     S.seType  = q.se;
   if (q.est && E.ESTIMATORS_ALL.indexOf(q.est) >= 0) S.ss.estimator = q.est;
-  if (q.samp && ["full", "nohealth", "trim"].indexOf(q.samp) >= 0) S.ss.sample = q.samp;
+  if (ALLOWED_SAMPLES.indexOf(q.samp) >= 0)   S.ss.sample = q.samp;
   if (q.yfe != null) S.ss.yearFE = q.yfe === "1";
-  if (q.ctrl != null) { var arr = q.ctrl ? q.ctrl.split(",") : []; Object.keys(S.ss.controls).forEach(function (k) { S.ss.controls[k] = arr.indexOf(k) >= 0; }); }
-  if (q.tab && ["data", "multi", "single", "export", "learn"].indexOf(q.tab) >= 0) S.viz = q.tab;
+  if (q.ctrl != null) {
+    var ssAllow = E.CONTROL_KEYS.concat(["race"]);
+    var arr = filterAllowed(q.ctrl, ssAllow);
+    Object.keys(S.ss.controls).forEach(function (k) { S.ss.controls[k] = arr.indexOf(k) >= 0; });
+  }
+  if (ALLOWED_VIZ.indexOf(q.tab) >= 0) S.viz = q.tab;
+  if (q.seed != null && q.seed !== "") { var sd = parseInt(q.seed, 10); if (isFinite(sd) && sd >= 0) S.seed = sd; }
+  // multiverse axes — strict allow-listed
+  if (q.axEst != null) {
+    var ax = filterAllowed(q.axEst, E.ESTIMATORS_ALL);
+    if (ax.length) S.axes.estimators = ax;
+  }
+  if (q.axCtrl != null) {
+    var axc = filterAllowed(q.axCtrl, E.CONTROL_KEYS.concat(["race"]));
+    S.axes.controlsVary = axc;
+  }
+  if (q.axYfeV != null) S.axes.yearFEVary = q.axYfeV === "1";
+  if (q.axSamp != null) {
+    var axs = filterAllowed(q.axSamp, ALLOWED_SAMPLES);
+    if (axs.length) S.axes.sampleVary = axs;
+  }
 }
+
 function syncDom() {
   Array.prototype.forEach.call(document.getElementsByName("focal"), function (el) { el.checked = el.value === S.focal; });
   $("outcome").value = S.outcome; $("seType").value = S.seType;
   $("ssEstimator").value = S.ss.estimator; $("ssSample").value = S.ss.sample; $("ssYearFE").checked = S.ss.yearFE;
+  var si = $("seedInput"); if (si) si.value = String(S.seed);
+  // multiverse axes — rebuild then reflect S.axes.* into the DOM
+  buildAxisControls();
+  var axYfe = $("axisYearFE"); if (axYfe) axYfe.checked = !!S.axes.yearFEVary;
+  Array.prototype.forEach.call(document.getElementsByClassName("axisSample"), function (el) {
+    el.checked = S.axes.sampleVary.indexOf(el.value) >= 0;
+  });
 }
 
 // ============== UI BINDING ==============
@@ -723,6 +839,7 @@ function bindUI() {
   Array.prototype.forEach.call(document.getElementsByName("focal"), function (el) { el.addEventListener("change", function (e) { if (e.target.checked) setFocal(e.target.value); }); });
   $("outcome").addEventListener("change", function (e) { S.outcome = e.target.value; S.multiResults = null; renderAll(); syncHash(); });
   $("seType").addEventListener("change", function (e) { S.seType = e.target.value; S.multiResults = null; renderAll(); syncHash(); });
+  $("seedInput").addEventListener("change", function (e) { var v = parseInt(e.target.value, 10); if (isFinite(v) && v >= 0) { S.seed = v; syncHash(); } });
   $("btn-share").addEventListener("click", function () {
     var url = location.origin + location.pathname + stateToHash(); var b = this;
     navigator.clipboard.writeText(url).then(function () { var o = b.textContent; b.textContent = "🔗 Link copied ✓"; setTimeout(function () { b.textContent = o; }, 1500); });
@@ -732,6 +849,7 @@ function bindUI() {
   $("figClose").addEventListener("click", closeFig);
   $("figModal").addEventListener("click", function (e) { if (e.target === $("figModal")) closeFig(); });
   document.addEventListener("keydown", function (e) { if (e.key === "Escape") closeFig(); });
+  document.addEventListener("keydown", trapFigModalFocus);
   $("btn-lesson").addEventListener("click", function () { showLesson(0); });
   $("lessonNext").addEventListener("click", function () { showLesson(S.lessonStep + 1); });
   $("lessonPrev").addEventListener("click", function () { showLesson(S.lessonStep - 1); });
@@ -750,7 +868,7 @@ function bindUI() {
     var btn = this, lab = btn.textContent; btn.disabled = true; btn.textContent = "Bootstrapping… (B=500)";
     var box = $("bootstrapResult"); box.className = "alert alert-info mt-2"; box.textContent = "Resampling 545 persons with replacement, 500 times…";
     setTimeout(function () {
-      var r = E.bootstrapFocal(DATA, ssSpec(S.ss.estimator), META, 500);
+      var r = E.bootstrapFocal(DATA, ssSpec(S.ss.estimator), META, 500, { rng: E.mulberry32(S.seed) });
       var pt = E.runSpec(DATA, ssSpec(S.ss.estimator), META);
       if (r.B > 0) {
         box.className = "alert alert-success mt-2";
@@ -759,29 +877,55 @@ function bindUI() {
       btn.disabled = false; btn.textContent = lab;
     }, 30);
   });
+  // Inference is chunked so the UI stays responsive; a Cancel button flips
+  // `_inferenceCancel`, which the step loop checks each tick and bails out of
+  // gracefully, restoring the button state and labelling the result cancelled.
+  var _inferenceCancel = false;
+  $("btn-inference-cancel").addEventListener("click", function () { _inferenceCancel = true; });
   $("btn-inference").addEventListener("click", function () {
-    var btn = this, lab = btn.textContent; btn.disabled = true; btn.textContent = "Running…";
+    var btn = this, lab = btn.textContent, cancelBtn = $("btn-inference-cancel");
+    _inferenceCancel = false; btn.disabled = true; btn.textContent = "Running…";
+    cancelBtn.style.display = "inline-block";
     var axes = buildAxes(), obs = E.curveStats(E.enumerateMultiverse(DATA, axes, META));
     var B = 100, medGE = 0, sigGE = 0, b = 0;
+    var rng = E.mulberry32(S.seed); // seeded; same seed → identical p-values across reloads
     var box = $("inferenceBox"); box.style.display = "block"; box.className = "alert alert-info";
     setViz("multi"); box.style.display = "block"; // ensure visible on the multiverse tab
-    function render(done) {
+    function render(done, cancelled) {
       var pMed = (medGE + 1) / (b + 1), pSig = (sigGE + 1) / (b + 1);
-      box.innerHTML = "<strong>🎲 Randomization inference on the whole curve</strong>" +
+      var heading = cancelled
+        ? "<strong>🎲 Randomization inference (cancelled)</strong>"
+        : "<strong>🎲 Randomization inference on the whole curve</strong>";
+      box.innerHTML = heading +
         "<div class='progress-bar'><div class='progress-bar-fill' style='width:" + Math.round(100 * b / B) + "%'></div></div>" +
-        (done ? "" : "Permuting the focal variable under “no effect” and rebuilding the curve… " + b + " / " + B + " draws") +
+        (cancelled ? ("Cancelled after " + b + " of " + B + " draws. Partial estimate: p(|median| ≥ observed) ≈ <strong>" + pMed.toFixed(3) + "</strong>; p(# significant ≥ observed) ≈ <strong>" + pSig.toFixed(3) + "</strong>.") :
         (done ? ("Observed curve: median estimate <strong>" + fmt(obs.median, 3) + "</strong>, " + obs.nSigDom + " of " + obs.n + " specifications significant in the dominant direction.<br>" +
           "p(|median| ≥ observed) = <strong>" + pMed.toFixed(3) + "</strong> &nbsp;·&nbsp; p(# significant ≥ observed) = <strong>" + pSig.toFixed(3) + "</strong><br>" +
-          "<span class='help-text'>" + (Math.min(pMed, pSig) < 0.05 ? "The observed curve is hard to reconcile with “the focal variable has no effect.”" : "The curve is not clearly distinguishable from what “no effect” would produce.") + "</span>") : "");
-      box.className = "alert " + (done ? (Math.min(pMed, pSig) < 0.05 ? "alert-success" : "alert-warning") : "alert-info");
+          "<span class='help-text'>" + (Math.min(pMed, pSig) < 0.05 ? "The observed curve is hard to reconcile with “the focal variable has no effect.”" : "The curve is not clearly distinguishable from what “no effect” would produce.") + "</span>")
+         : ("Permuting the focal variable under “no effect” and rebuilding the curve… " + b + " / " + B + " draws")));
+      box.className = "alert " + (cancelled ? "alert-warning" : (done ? (Math.min(pMed, pSig) < 0.05 ? "alert-success" : "alert-warning") : "alert-info"));
+    }
+    function finish(cancelled) {
+      render(b >= B || cancelled, cancelled);
+      btn.disabled = false; btn.textContent = lab;
+      cancelBtn.style.display = "none";
+      box.scrollIntoView({ behavior: "smooth", block: "center" });
     }
     function step() {
+      if (_inferenceCancel) { finish(true); return; }
       var chunk = Math.min(4, B - b);
-      for (var c = 0; c < chunk; c++) { var s = E.nullReplication(DATA, axes, META); if (Math.abs(s.median) >= Math.abs(obs.median)) medGE++; if (s.nSigDom >= obs.nSigDom) sigGE++; b++; }
-      render(b >= B);
-      if (b < B) setTimeout(step, 0); else { btn.disabled = false; btn.textContent = lab; box.scrollIntoView({ behavior: "smooth", block: "center" }); }
+      for (var c = 0; c < chunk; c++) {
+        if (_inferenceCancel) break;
+        var s = E.nullReplication(DATA, axes, META, { rng: rng });
+        if (Math.abs(s.median) >= Math.abs(obs.median)) medGE++;
+        if (s.nSigDom >= obs.nSigDom) sigGE++;
+        b++;
+      }
+      if (_inferenceCancel) { finish(true); return; }
+      render(b >= B, false);
+      if (b < B) setTimeout(step, 0); else finish(false);
     }
-    render(false); setTimeout(step, 20);
+    render(false, false); setTimeout(step, 20);
   });
   $("ssEstimator").addEventListener("change", function (e) { S.ss.estimator = e.target.value; renderSingle(); syncHash(); });
   $("ssYearFE").addEventListener("change", function (e) { S.ss.yearFE = e.target.checked; renderSingle(); syncHash(); });

@@ -1,0 +1,69 @@
+# Deploys the static lab (browser app + bundled data) to the academic-site
+# repository at kevisc/kevisc.github.io under /sim-paneldata/, preserving the
+# existing public URL https://kevinschoenholzer.com/sim-paneldata/.
+#
+# Setup (one-time, after the new repo is pushed to GitHub):
+#   1. Create a fine-grained Personal Access Token scoped to
+#      `kevisc/kevisc.github.io` with `contents: read & write`.
+#   2. In this repo's Settings → Secrets and variables → Actions, add a secret
+#      named `SITE_DEPLOY_TOKEN` with that token's value.
+#   3. Enable Actions on this repo.
+#
+# The workflow runs on every push to main (filtered by file path) and on
+# manual dispatch.  Paper sources, the review report, replication scripts,
+# and the headless export tool are not deployed -- only the runtime app and
+# its bundled data.
+name: Deploy lab to academic site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'index.html'
+      - 'engine.js'
+      - 'app.js'
+      - 'exports.js'
+      - 'data/**'
+      - 'figures/*.png'
+      - 'LICENSE'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source (this repo)
+        uses: actions/checkout@v4
+        with:
+          path: src
+
+      - name: Check out target (academic site)
+        uses: actions/checkout@v4
+        with:
+          repository: kevisc/kevisc.github.io
+          token: ${{ secrets.SITE_DEPLOY_TOKEN }}
+          path: site
+
+      - name: Mirror app into site/sim-paneldata
+        run: |
+          rsync -a --delete \
+            --exclude='.git/' --exclude='.github/' \
+            --exclude='paper.md' --exclude='paper.pdf' --exclude='paper.bib' \
+            --exclude='paper-jee.md' --exclude='paper-jose.md' \
+            --exclude='REVIEW_REPORT.md' --exclude='REVIEW_TOP_PRIORITIES.json' \
+            --exclude='tools/' --exclude='analysis/' --exclude='verification/' \
+            --exclude='requirements.txt' \
+            src/ site/sim-paneldata/
+
+      - name: Commit and push to site (if anything changed)
+        working-directory: site
+        run: |
+          git config user.name  "panel-multiverse-lab deploy bot"
+          git config user.email "deploy-bot@users.noreply.github.com"
+          git add sim-paneldata/
+          if git diff --cached --quiet; then
+            echo "no changes to deploy"
+          else
+            git commit -m "Deploy from panel-multiverse-lab @ ${GITHUB_SHA::7}"
+            git push
+          fi

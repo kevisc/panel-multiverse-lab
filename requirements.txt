@@ -1,0 +1,6 @@
+# Python dependencies for verification/replicate_python.py.
+# Pinned to the versions used for the numbers reported in the paper.
+# Install with:  python -m pip install -r requirements.txt
+linearmodels==7.0
+pandas>=2.0,<3
+numpy>=1.26,<3

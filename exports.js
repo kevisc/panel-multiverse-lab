@@ -42,6 +42,7 @@
     var L = [], plmModel = { pooled: "pooling", between: "between", random: "random", within: "within", fd: "fd", twfe: "within", cre: "random" }[spec.estimator];
     var y = outcomeExpr(spec, "r");
     L.push("# " + label(spec) + "  —  " + sampleComment(spec));
+    if (spec.seed != null) L.push("set.seed(" + (spec.seed | 0) + ")   # for any bootstrap/permutation you add downstream");
     L.push("library(wooldridge); library(plm); library(lmtest); library(sandwich)");
     L.push("data(wagepan); d <- wagepan");
     if (needsDerive(spec)) {
@@ -78,6 +79,7 @@
     var vce = spec.seType === "cluster" ? ", vce(cluster nr)" : spec.seType === "robust" ? ", vce(robust)" : "";
     L.push("* " + label(spec) + "  —  " + sampleComment(spec));
     L.push("* (load the wagepan extract, then:)");
+    if (spec.seed != null) L.push("set seed " + (spec.seed | 0) + "   // for any bootstrap/permutation you add downstream");
     L.push("xtset nr year");
     if (needsDerive(spec)) L.push("* industry/region must be encoded as categoricals first (see app data-prep)");
     if (spec.sample === "nohealth") L.push("drop if poorhlth == 1");
@@ -116,6 +118,7 @@
     var L = [], y = spec.outcome === "wage" ? "np.exp(df['lwage'])" : "df['lwage']";
     L.push("# " + label(spec) + "  —  " + sampleComment(spec));
     L.push("import numpy as np, pandas as pd");
+    if (spec.seed != null) L.push("np.random.seed(" + (spec.seed | 0) + ")   # for any bootstrap/permutation you add downstream");
     L.push("from linearmodels.panel import PooledOLS, BetweenOLS, RandomEffects, PanelOLS, FirstDifferenceOLS");
     L.push("# df: the wagepan extract with columns nr, year, lwage, union, married, educ, exper, expersq, ...");
     if (spec.sample === "nohealth") L.push("df = df[df['poorhlth'] != 1].copy()");

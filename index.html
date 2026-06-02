@@ -178,6 +178,12 @@
             </select>
             <div class="help-text">Clustering by person is the defensible default for panels: it allows arbitrary within-person correlation. It changes the <em>confidence interval</em>, not the point estimate.</div>
           </div>
+          <div class="param-group">
+            <div class="param-group-title">Reproducibility seed</div>
+            <input type="number" id="seedInput" min="0" step="1" value="42" aria-label="Random number generator seed"
+                   style="width:100%;background:#0c0c0c;border:1px solid var(--border);color:var(--text);border-radius:10px;padding:8px 10px;font-size:13px">
+            <div class="help-text">Seeds the cluster bootstrap and the randomization test. The same seed reproduces the same confidence intervals and <em>p</em>-values; the seed is encoded in the “Copy shareable link” URL.</div>
+          </div>
         </div>
 
         <div class="panel mt-3">
@@ -289,8 +295,11 @@
                 <button class="btn btn-primary" id="btn-runmulti" style="width:100%">Build the multiverse →</button>
                 <div class="help-text mt-2" id="comboCount"></div>
                 <div class="param-group-title mt-3">Joint inference</div>
-                <button class="btn" id="btn-inference" style="width:100%">Test the whole curve (randomization, B=100)</button>
-                <div class="help-text mt-2" id="inferenceResult">Under the sharp null that the focal variable has no effect, its values are permuted across observations and the whole curve recomputed many times. Compares the observed curve to that null distribution.</div>
+                <div style="display:flex;gap:6px">
+                  <button class="btn" id="btn-inference" style="flex:1">Test the whole curve (randomization, B=100)</button>
+                  <button class="btn" id="btn-inference-cancel" style="display:none" aria-label="Cancel the running randomization test">Cancel</button>
+                </div>
+                <div class="help-text mt-2" id="inferenceResult">Under the sharp null that the focal variable has no effect, its values are permuted at the person level (preserving within-person dependence) and the whole curve recomputed many times. Compares the observed curve to that null distribution.</div>
               </div>
             </div>
 
@@ -358,7 +367,7 @@
                 <h2 style="margin:0">⚙️ Under the hood — the equation being estimated</h2>
                 <label class="opt" style="margin:0;white-space:nowrap"><input type="checkbox" id="showEq" checked> show equations</label>
               </div>
-              <div id="eqContent" class="mt-3"></div>
+              <div id="eqContent" class="mt-3" aria-live="polite" aria-atomic="false"></div>
             </div>
 
             <div class="mt-4">
@@ -573,8 +582,8 @@ Econometrics, 13(2), 163–183.   [the bundled NLSY wage-panel extract]</div>
   </footer>
 </div>
 
-<script src="engine.js?v=20260528"></script>
-<script src="exports.js?v=20260528"></script>
-<script src="app.js?v=20260528"></script>
+<script src="engine.js?v=20260602"></script>
+<script src="exports.js?v=20260602"></script>
+<script src="app.js?v=20260602"></script>
 </body>
 </html>

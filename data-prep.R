@@ -2,6 +2,17 @@ options(repos=c(CRAN="https://cloud.r-project.org"))
 need <- c("wooldridge","plm","jsonlite","lmtest","sandwich")
 for(p in need) if(!requireNamespace(p,quietly=TRUE)) install.packages(p)
 suppressMessages({library(wooldridge);library(plm);library(jsonlite);library(lmtest);library(sandwich)})
+
+# Resolve every output path relative to this script's location so the script
+# is portable across machines and CI runners.  When run with `Rscript`,
+# commandArgs(trailingOnly=FALSE) yields a "--file=…" entry whose value is the
+# path of the script being executed; we strip that and use its directory as
+# the project root.
+script_path <- sub("--file=", "", grep("--file=", commandArgs(trailingOnly = FALSE), value = TRUE)[1])
+PROJ_ROOT   <- if (length(script_path) && nzchar(script_path)) dirname(normalizePath(script_path)) else normalizePath(getwd())
+OUT_JSON    <- file.path(PROJ_ROOT, "data", "wagepan.json")
+dir.create(dirname(OUT_JSON), showWarnings = FALSE, recursive = TRUE)
+
 data(wagepan)
 d <- wagepan
 
@@ -20,9 +31,8 @@ out$wage    <- round(exp(out$lwage),2)
 out$hours   <- as.integer(out$hours)
 out$exper   <- as.integer(out$exper)
 out$expersq <- as.integer(out$expersq)
-write_json(out, "/Users/kevinschoenholzer/Documents/GitHub/kevisc.github.io/sim-paneldata/data/wagepan.json",
-           dataframe="rows", digits=4, auto_unbox=TRUE)
-cat("WROTE JSON rows:", nrow(out), " file size:", file.size("/Users/kevinschoenholzer/Documents/GitHub/kevisc.github.io/sim-paneldata/data/wagepan.json"), "bytes\n\n")
+write_json(out, OUT_JSON, dataframe="rows", digits=4, auto_unbox=TRUE)
+cat("WROTE JSON rows:", nrow(out), " file size:", file.size(OUT_JSON), "bytes\n\n")
 
 # canonical estimates ---------------------------------------------------------
 pd <- pdata.frame(d, index=c("nr","year"))
