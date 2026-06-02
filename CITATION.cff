@@ -15,13 +15,12 @@ url: "https://kevinschoenholzer.com/sim-paneldata/"
 # After pushing this repo to GitHub, tag a release matching `version:` above
 # (a 404 here would block RSOS / PLOS ONE reproducibility checks).
 repository-code: "https://github.com/kevisc/panel-multiverse-lab"
-# TODO before submission: replace the placeholder DOI below with the reserved
-# Zenodo DOI obtained via Zenodo's "Reserve DOI" feature on a draft record, and
-# publish the archived release at acceptance. Cite this DOI in paper.md as well.
+# The Zenodo deposit is published from a GitHub release; tag v1.0.0 to trigger
+# the auto-archive (the reserved DOI below is bound to that record).
 identifiers:
   - type: doi
-    value: "10.5281/zenodo.XXXXXXX"
-    description: "Archived release of the Panel Data Multiverse Lab (placeholder; reserve via Zenodo before submission)"
+    value: "10.5281/zenodo.20507117"
+    description: "Archived release of the Panel Data Multiverse Lab"
 keywords:
   - econometrics
   - panel data
