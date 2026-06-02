@@ -4,7 +4,7 @@
  *
  * Pure computation, no DOM. Loadable in the browser (attaches to window.PanelEngine)
  * and in Node (module.exports) so the same code that runs the app also runs the
- * verification suite against canonical plm estimates (see verify.mjs).
+ * verification suite against canonical plm estimates (see verify.cjs).
  *
  * Estimators implemented: Pooled OLS, Between, Random Effects (Swamy–Arora style),
  * Fixed Effects (within), First Differences. Standard errors: classical, robust
@@ -299,16 +299,6 @@
     var v = model.vcov && model.vcov[i] ? model.vcov[i][i] : NaN;
     return { b: model.beta[i], se: model.se[i], varc: v, idx: i };
   }
-  function hausman(fe, re, coefName) {
-    var f = coefAt(fe, coefName), r = coefAt(re, coefName);
-    if (!isFinite(f.b) || !isFinite(r.b) || !isFinite(f.varc) || !isFinite(r.varc))
-      return { stat: NaN, pval: NaN, df: 1, ok: false, msg: "Coefficient not identified in both models" };
-    var diff = f.b - r.b, vd = f.varc - r.varc;
-    if (vd <= 0) return { stat: NaN, pval: NaN, df: 1, ok: false, msg: "Var(FE)−Var(RE) ≤ 0; test unreliable for this spec" };
-    var H = diff * diff / vd;
-    return { stat: H, pval: pchisq(H, 1), df: 1, ok: true, diff: diff };
-  }
-
   // ============================================================
   //  Design construction for the wage panel
   // ============================================================
@@ -455,12 +445,15 @@
   }
 
   // ---------- specification-curve (joint) inference ----------
+  // Two-sided 95% normal critical value (used for plotted CIs and the "significant in the
+  // dominant direction" count; matches plm's default summary intervals).
+  var Z_95 = 1.96;
   // Test statistics on a curve: the median estimate and the count significant in the dominant direction.
   function curveStats(results) {
     var ok = results.filter(function (r) { return r.identified && isFinite(r.b) && isFinite(r.se); });
     if (!ok.length) return { median: NaN, nSigDom: 0, n: 0 };
     var med = quantile(ok.map(function (r) { return r.b; }), 0.5), dom = med >= 0 ? 1 : -1, nSig = 0;
-    ok.forEach(function (r) { var lo = r.b - 1.96 * r.se, hi = r.b + 1.96 * r.se; var sig = lo > 0 || hi < 0; if (sig && (r.b >= 0 ? 1 : -1) === dom) nSig++; });
+    ok.forEach(function (r) { var lo = r.b - Z_95 * r.se, hi = r.b + Z_95 * r.se; var sig = lo > 0 || hi < 0; if (sig && (r.b >= 0 ? 1 : -1) === dom) nSig++; });
     return { median: med, nSigDom: nSig, n: ok.length, dom: dom };
   }
   // Cluster-level (person-level) permutation of the focal regressor under the sharp null.
@@ -501,24 +494,11 @@
   function nullReplication(allRows, axes, meta, opts) {
     return curveStats(enumerateMultiverse(permuteFocal(allRows, axes.focal, opts), axes, meta));
   }
-  // synchronous full test (used in Node tests; the UI runs nullReplication in chunks for responsiveness)
-  function specCurveInference(allRows, axes, meta, B, opts) {
-    B = B || 200;
-    var obs = curveStats(enumerateMultiverse(allRows, axes, meta));
-    var medAbs = 0, sigGe = 0;
-    for (var b = 0; b < B; b++) {
-      var s = nullReplication(allRows, axes, meta, opts);
-      if (Math.abs(s.median) >= Math.abs(obs.median)) medAbs++;
-      if (s.nSigDom >= obs.nSigDom) sigGe++;
-    }
-    return { observed: obs, B: B, pMedian: (medAbs + 1) / (B + 1), pShareSig: (sigGe + 1) / (B + 1) };
-  }
-
   // summary of a multiverse run (over identified specs only)
   function summarize(results) {
     var ok = results.filter(function (r) { return r.identified && isFinite(r.b); });
     var bs = ok.map(function (r) { return r.b; });
-    var sig = ok.filter(function (r) { var lo = r.b - 1.96 * r.se, hi = r.b + 1.96 * r.se; return lo > 0 || hi < 0; });
+    var sig = ok.filter(function (r) { var lo = r.b - Z_95 * r.se, hi = r.b + Z_95 * r.se; return lo > 0 || hi < 0; });
     var med = ok.length ? quantile(bs, 0.5) : NaN;
     var refSign = med >= 0 ? 1 : -1;
     var flips = ok.filter(function (r) { return (r.b >= 0 ? 1 : -1) !== refSign; });
@@ -533,9 +513,9 @@
   return {
     mean: mean, variance: variance, quantile: quantile, pnorm: pnorm, pchisq: pchisq, mulberry32: mulberry32,
     ols: ols, feWithin: feWithin, between: between, randomEffects: randomEffects,
-    firstDifferences: firstDifferences, hausman: hausman, hausmanFull: hausmanFull, coefAt: coefAt,
+    firstDifferences: firstDifferences, hausmanFull: hausmanFull, coefAt: coefAt,
     groupMeans: groupMeans, bootstrapFocal: bootstrapFocal,
-    curveStats: curveStats, permuteFocal: permuteFocal, nullReplication: nullReplication, specCurveInference: specCurveInference,
+    curveStats: curveStats, permuteFocal: permuteFocal, nullReplication: nullReplication,
     buildRaw: buildRaw, runSpec: runSpec, enumerateMultiverse: enumerateMultiverse,
     summarize: summarize, applySample: applySample,
     ALL_ESTIMATORS: ALL_ESTIMATORS, ESTIMATORS_ALL: ESTIMATORS_ALL, CONTROL_KEYS: CONTROL_KEYS, FOCAL: FOCAL

@@ -10,6 +10,7 @@ the dominant axis of analytic flexibility in panel-data work.
 **Verification:** R (`plm`) and Python (`linearmodels`) reproduce all 1,440
 specifications independently — see [`verification/`](verification/).
 
+[![Verify](https://github.com/kevisc/panel-multiverse-lab/actions/workflows/verify.yml/badge.svg)](https://github.com/kevisc/panel-multiverse-lab/actions/workflows/verify.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Cite](https://img.shields.io/badge/cite-CITATION.cff-blue)](CITATION.cff)
 [![Status](https://img.shields.io/badge/status-pre--submission-yellow)](paper.md)

@@ -9,7 +9,7 @@ authors:
     affiliation: "Università della Svizzera italiana (USI)"
     email: kevin.schoenholzer@usi.ch
 version: "1.0.0"
-date-released: "2026-05-26"
+date-released: "2026-06-02"
 license: MIT
 url: "https://kevinschoenholzer.com/sim-paneldata/"
 # After pushing this repo to GitHub, tag a release matching `version:` above
