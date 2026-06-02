@@ -5,7 +5,7 @@ read the same bundled data (`../data/wagepan.json`) the application ships.
 
 | Script | Language | What it checks |
 |---|---|---|
-| `../verify.cjs` | Node.js | Engine self-test against canonical `plm` values (23 benchmarks: pooled/between/RE/FE/FD coefficients and SEs, plus the Hausman test and the FE/FD non-identification of time-invariant regressors). |
+| `../verify.cjs` | Node.js | Engine self-test against canonical `plm` and `sandwich` values (33 checks: pooled/between/RE/FE/FD coefficients and classical SEs; HC1 and cluster-robust (CR1) SEs vs `sandwich::vcovHC` and `vcovCL`; the full Hausman test against `plm::phtest`; the Mundlak CRE ≡ FE equivalence to machine precision; the two-way fixed effects ≡ within + year FE self-equivalence; and the FE/FD non-identification of time-invariant regressors). |
 | `replicate_plm.R` | R (`plm`) | Re-fits **every** specification in the default multiverse (3 estimands × 480 = 1,440) and compares the focal coefficient. |
 | `replicate_python.py` | Python (`linearmodels`) | Independent re-fit of the same 1,440 specifications in a second language/ecosystem. |
 

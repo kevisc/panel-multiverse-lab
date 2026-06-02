@@ -66,7 +66,8 @@ idempotent and self-contained. Required software versions are listed below.
 # 1. Regenerate the bundled data extract (writes data/wagepan.json).
 Rscript data-prep.R
 
-# 2. Engine self-test against canonical plm benchmarks (23/23 must pass).
+# 2. Engine self-test against canonical plm + sandwich benchmarks
+#    (33/33 must pass: pooled/between/RE/FE/FD + CRE, TWFE, HC1, CR1, Hausman).
 node verify.cjs
 
 # 3. Headless export of the full multiverse to CSV (drives the engine in
@@ -143,7 +144,6 @@ panel-multiverse-lab/
 ├── paper.md                ─ the methods note
 ├── paper.bib               ─ bibliography
 ├── paper.pdf               (generated)
-├── REVIEW_REPORT.md        ─ pre-submission review notes
 ├── CITATION.cff
 ├── LICENSE                 ─ MIT
 └── README.md               (this file)
@@ -153,11 +153,14 @@ panel-multiverse-lab/
 
 The numerical core is verified at three independent levels:
 
-1. **Engine self-test** (`node verify.cjs`): 23 canonical `plm` benchmarks
-   covering pooled / between / random / within / FD coefficients and SEs,
-   the full Hausman joint statistic, the Mundlak CRE ≡ FE equivalence, the
-   two-way fixed effects ≡ within + year FE equivalence, and the
-   non-identification of time-invariant regressors under within estimators.
+1. **Engine self-test** (`node verify.cjs`): 33 canonical-numbers checks
+   against R's `plm` and `sandwich`, covering pooled / between / random /
+   within / FD coefficients and classical SEs, HC1 and cluster-robust (CR1)
+   standard errors against `sandwich::vcovHC` and `vcovCL`, the full Hausman
+   joint statistic against `plm::phtest`, the Mundlak CRE ≡ FE equivalence to
+   machine precision, the two-way fixed effects ≡ within + year FE
+   self-equivalence, and the non-identification of time-invariant regressors
+   under within estimators.
 2. **R replication** via `plm` of all 1,440 specifications
    (`Rscript verification/replicate_plm.R`): pooled, between, fixed-effects
    and first-difference coefficients agree to better than 1 × 10⁻⁶; random
@@ -174,8 +177,10 @@ enforced automatically.
 ## Cite
 
 If you use this software or the methods note in your work, please cite using
-the metadata in [`CITATION.cff`](CITATION.cff). Once the archived release
-is deposited on Zenodo, cite the DOI listed there.
+the metadata in [`CITATION.cff`](CITATION.cff). The Zenodo DOI is reserved
+at [`10.5281/zenodo.20507117`](https://doi.org/10.5281/zenodo.20507117); the
+archived record is published from the `v1.0.0` GitHub release at paper
+acceptance, and the DOI then resolves to the deposit.
 
 ## License
 

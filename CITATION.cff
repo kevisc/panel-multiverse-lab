@@ -20,7 +20,7 @@ repository-code: "https://github.com/kevisc/panel-multiverse-lab"
 identifiers:
   - type: doi
     value: "10.5281/zenodo.20507117"
-    description: "Archived release of the Panel Data Multiverse Lab"
+    description: "Archived release of the Panel Data Multiverse Lab (reserved; record published from the v1.0.0 GitHub release at paper acceptance)"
 keywords:
   - econometrics
   - panel data
@@ -38,10 +38,22 @@ abstract: >-
   picks a focal estimand on the NLSY wage panel of Vella and Verbeek (1998)
   and the engine enumerates the full specification curve implied by reasonable
   choices of estimator (pooled OLS, between, random effects, fixed effects,
-  first differences, correlated random effects, and two-way fixed effects),
-  controls, sample, year effects, and inference family. All computation runs
+  and first differences; correlated random effects and two-way fixed effects
+  are available as interactive sensitivity checks), controls, sample, year
+  effects, and inference family. All computation runs
   client-side with no installation; every estimator is verified against R's
   plm and Python's linearmodels across all 1,440 specifications; and the tool
   emits equivalent R, Stata, and Python code, exportable figures and reports,
   a live equation panel, and a permalink that round-trips full app state
   through the URL hash.
+preferred-citation:
+  type: article
+  title: "Estimator choice is the dominant forking path: a specification-curve analysis of panel-data estimation"
+  authors:
+    - family-names: Schoenholzer
+      given-names: Kevin
+      orcid: "https://orcid.org/0000-0001-9892-5869"
+      affiliation: "Università della Svizzera italiana (USI)"
+      email: kevin.schoenholzer@usi.ch
+  year: 2026
+  notes: "Methods note in submission; journal and DOI to be added on acceptance. Cite this software (the entry above) when describing the implementation; cite this article when describing the methodological argument."
