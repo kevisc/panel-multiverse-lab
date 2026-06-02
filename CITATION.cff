@@ -34,13 +34,14 @@ keywords:
   - active learning
 abstract: >-
   The Panel Data Multiverse Lab is a free, open-source, browser-based tool for
-  teaching panel-data econometrics and the fragility of empirical estimates.
-  Using a real longitudinal wage panel (the NLSY extract of Vella and Verbeek,
-  1998), students build the full specification curve implied by reasonable
+  exploring panel-data multiverse analyses on real longitudinal data. The user
+  picks a focal estimand on the NLSY wage panel of Vella and Verbeek (1998)
+  and the engine enumerates the full specification curve implied by reasonable
   choices of estimator (pooled OLS, between, random effects, fixed effects,
   first differences, correlated random effects, and two-way fixed effects),
-  controls, sample, and standard errors. All computation runs client-side with
-  no installation or programming, every estimator is verified against R's plm
-  and Python's linearmodels across all 1,440 specifications, and the tool
-  generates equivalent R/Stata/Python code, exportable figures and reports, a
-  live equation panel, a guided lesson, and self-check questions.
+  controls, sample, year effects, and inference family. All computation runs
+  client-side with no installation; every estimator is verified against R's
+  plm and Python's linearmodels across all 1,440 specifications; and the tool
+  emits equivalent R, Stata, and Python code, exportable figures and reports,
+  a live equation panel, and a permalink that round-trips full app state
+  through the URL hash.
